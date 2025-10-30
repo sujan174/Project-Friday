@@ -14,14 +14,15 @@ from connectors.base_agent import BaseAgent
 
 
 class Agent(BaseAgent):
-    """Specialized agent for Jira operations via MCP"""
+    """Specialized agent for Jira operations via MCP using sooperset/mcp-atlassian"""
     
-    def __init__(self):
+    def __init__(self, verbose: bool = False):
         super().__init__()
         self.session: ClientSession = None
         self.stdio_context = None
         self.model = None
         self.available_tools = []
+        self.verbose = verbose  # Enable verbose logging
         
         self.schema_type_map = {
             "string": protos.Type.STRING,
@@ -121,6 +122,23 @@ The issue is now in the 'To Do' status and visible in the sprint board."
 - **Be clear**: Use natural language to explain what happened, avoiding Jira jargon when possible
 - **Be safe**: For destructive operations, describe what will happen before execution
 
+# CRITICAL: Always Verify Your Actions
+
+**This is extremely important**: After performing ANY update, transition, or modification operation, you MUST verify the change was successful by:
+
+1. **Immediately search or retrieve the affected issues** to confirm the changes
+2. **Check the actual current state** matches what you attempted to change
+3. **Report discrepancies** if the verification shows the action didn't complete as expected
+4. **Never assume success** - always verify with a follow-up query
+
+Example workflow:
+- User asks: "Mark KAN-1, KAN-2, KAN-3 as Done"
+- You execute: Transition each issue to Done
+- You MUST verify: Search for those issues and check their current status
+- You report: "Verified: KAN-1 and KAN-2 are now Done. However, KAN-3 is still In Progress - let me retry..."
+
+This verification step is NOT optional. Users depend on accurate information about what actually happened.
+
 # Understanding User Intent
 
 Common request patterns and how to handle them:
@@ -132,16 +150,48 @@ Common request patterns and how to handle them:
 Remember: You're not just executing commands—you're helping users manage their work more effectively. Think about what they're trying to accomplish and help them get there efficiently."""
     
     async def initialize(self):
-        """Connect to the Atlassian MCP server"""
+        """Connect to the Jira MCP server using sooperset/mcp-atlassian"""
         try:
-            # Atlassian's official MCP Remote Proxy configuration
-            # Auth is handled via a browser popup triggered by mcp-remote
+            # Required environment variables for sooperset/mcp-atlassian
+            jira_url = os.environ.get("JIRA_URL")
+            jira_username = os.environ.get("JIRA_USERNAME")
+            jira_api_token = os.environ.get("JIRA_API_TOKEN")
+
+            if not all([jira_url, jira_username, jira_api_token]):
+                raise ValueError(
+                    "Missing required environment variables.\n"
+                    "Please set the following:\n"
+                    "  JIRA_URL - Your full Jira URL (e.g., 'https://mycompany.atlassian.net')\n"
+                    "  JIRA_USERNAME - Your Atlassian account email\n"
+                    "  JIRA_API_TOKEN - Your Jira API token\n\n"
+                    "To create an API token:\n"
+                    "1. Go to https://id.atlassian.com/manage-profile/security/api-tokens\n"
+                    "2. Click 'Create API token'\n"
+                    "3. Give it a label and copy the token\n"
+                    "4. Set it in your environment"
+                )
+
+            # Remove trailing slash from URL if present
+            jira_url = jira_url.rstrip('/')
+
+            # Use the sooperset/mcp-atlassian Docker image
             server_params = StdioServerParameters(
-                command="npx",
-                args=["-y", "mcp-remote", "https://mcp.atlassian.com/v1/sse"],
-                env={**os.environ}
+                command="docker",
+                args=[
+                    "run", "-i", "--rm",
+                    "-e", "JIRA_URL",
+                    "-e", "JIRA_USERNAME",
+                    "-e", "JIRA_API_TOKEN",
+                    "ghcr.io/sooperset/mcp-atlassian:latest"
+                ],
+                env={
+                    **os.environ,
+                    "JIRA_URL": jira_url,
+                    "JIRA_USERNAME": jira_username,
+                    "JIRA_API_TOKEN": jira_api_token,
+                }
             )
-            
+        
             self.stdio_context = stdio_client(server_params)
             stdio, write = await self.stdio_context.__aenter__()
             self.session = ClientSession(stdio, write)
@@ -152,6 +202,9 @@ Remember: You're not just executing commands—you're helping users manage their
             # Load tools
             tools_list = await self.session.list_tools()
             self.available_tools = tools_list.tools
+            
+            if not self.available_tools:
+                raise RuntimeError("No tools available from Atlassian MCP server")
             
             # Convert to Gemini format
             gemini_tools = [self._build_function_declaration(tool) for tool in self.available_tools]
@@ -166,13 +219,31 @@ Remember: You're not just executing commands—you're helping users manage their
             self.initialized = True
             
         except Exception as e:
+            error_msg = str(e)
+            troubleshooting = [
+                "\nTroubleshooting steps:",
+                "1. Ensure Docker is installed and running:",
+                "   docker --version",
+                "   docker ps",
+                "",
+                "2. Verify environment variables are set correctly:",
+                "   - JIRA_URL (full URL like https://mycompany.atlassian.net)",
+                "   - JIRA_USERNAME (your Atlassian account email)",
+                "   - JIRA_API_TOKEN (from https://id.atlassian.com/manage-profile/security/api-tokens)",
+                "",
+                "3. Test your credentials manually:",
+                "   curl -u YOUR_EMAIL:YOUR_API_TOKEN https://your-domain.atlassian.net/rest/api/3/myself",
+                "",
+                "4. Pull the Docker image manually:",
+                "   docker pull ghcr.io/sooperset/mcp-atlassian:latest",
+                "",
+                "5. Test the MCP server directly:",
+                "   docker run -i --rm -e JIRA_URL -e JIRA_USERNAME -e JIRA_API_TOKEN ghcr.io/sooperset/mcp-atlassian:latest"
+            ]
+
             raise RuntimeError(
-                f"Failed to initialize Jira agent: {e}\n"
-                "Troubleshooting steps:\n"
-                "1. Ensure npx is installed (npm install -g npx)\n"
-                "2. Check your internet connection\n"
-                "3. You may need to authenticate via browser popup when prompted\n"
-                "4. Verify you have access to the Jira instance"
+                f"Failed to initialize Jira agent: {error_msg}\n" +
+                "\n".join(troubleshooting)
             )
     
     async def get_capabilities(self) -> List[str]:
@@ -236,10 +307,15 @@ Remember: You're not just executing commands—you're helping users manage their
                 
                 tool_name = function_call.name
                 tool_args = self._deep_convert_proto_args(function_call.args)
-                
+
                 # Track action for debugging/logging
                 actions_taken.append(tool_name)
-                
+
+                # Log tool call if verbose
+                if self.verbose:
+                    print(f"\n[JIRA AGENT] Calling tool: {tool_name}")
+                    print(f"[JIRA AGENT] Arguments: {json.dumps(tool_args, indent=2)[:500]}")
+
                 # Call the tool via MCP with enhanced error handling
                 try:
                     tool_result = await self.session.call_tool(tool_name, tool_args)
@@ -252,7 +328,13 @@ Remember: You're not just executing commands—you're helping users manage their
                     result_text = "\n".join(result_content)
                     if not result_text:
                         result_text = json.dumps(tool_result.content, default=str)
-                    
+
+                    # Log tool result if verbose
+                    if self.verbose:
+                        print(f"[JIRA AGENT] Result: {result_text[:500]}")
+                        if tool_result.isError:
+                            print(f"[JIRA AGENT] ERROR FLAG SET: {tool_result.isError}")
+
                     # Send result back
                     response = await chat.send_message_async(
                         genai.protos.Content(
@@ -268,6 +350,11 @@ Remember: You're not just executing commands—you're helping users manage their
                 except Exception as e:
                     # Provide more helpful error messages
                     error_msg = self._format_tool_error(tool_name, str(e), tool_args)
+
+                    # Log error if verbose
+                    if self.verbose:
+                        print(f"[JIRA AGENT] ERROR calling {tool_name}: {error_msg}")
+
                     response = await chat.send_message_async(
                         genai.protos.Content(
                             parts=[genai.protos.Part(
@@ -301,7 +388,7 @@ Remember: You're not just executing commands—you're helping users manage their
         if "authentication" in error_lower or "unauthorized" in error_lower:
             return (
                 f"Authentication error when calling {tool_name}. "
-                "Your Jira session may have expired. Please re-authenticate."
+                "Your Jira API token may be invalid or expired. Please verify your JIRA_API_TOKEN."
             )
         elif "permission" in error_lower or "forbidden" in error_lower:
             return (
@@ -309,7 +396,7 @@ Remember: You're not just executing commands—you're helping users manage their
                 "You may not have the required permissions for this operation."
             )
         elif "not found" in error_lower or "404" in error_lower:
-            issue_key = args.get('issueKey') or args.get('issueIdOrKey')
+            issue_key = args.get('issueKey') or args.get('issueIdOrKey') or args.get('issueId')
             if issue_key:
                 return (
                     f"Issue '{issue_key}' not found. "
@@ -326,17 +413,17 @@ Remember: You're not just executing commands—you're helping users manage their
     
     async def cleanup(self):
         """Disconnect from Jira with proper cleanup"""
-        if self.session:
-            try:
+        try:
+            if self.session:
                 await self.session.__aexit__(None, None, None)
-            except Exception:
-                pass  # Suppress cleanup errors
+        except Exception:
+            pass  # Suppress cleanup errors
         
-        if self.stdio_context:
-            try:
+        try:
+            if self.stdio_context:
                 await self.stdio_context.__aexit__(None, None, None)
-            except Exception:
-                pass  # Suppress cleanup errors
+        except Exception:
+            pass  # Suppress cleanup errors
     
     def _build_function_declaration(self, tool: Any) -> protos.FunctionDeclaration:
         """Convert MCP tool to Gemini function declaration"""

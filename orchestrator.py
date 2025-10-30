@@ -151,6 +151,79 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
             print(f"\r{' ' * 80}\r", end='', flush=True)
             print("\033[?25h", end='', flush=True)
     
+    async def _load_single_agent(self, connector_file: Path) -> Optional[tuple]:
+        """Load a single agent connector. Returns (agent_name, agent_instance, capabilities) or None on failure."""
+        agent_name = connector_file.stem.replace("_agent", "")
+        
+        # Skip base_agent.py
+        if agent_name == "base":
+            return None
+            
+        if self.verbose:
+            print(f"{C.CYAN}📦 Loading: {C.BOLD}{agent_name}{C.ENDC}{C.CYAN} agent...{C.ENDC}")
+        
+        try:
+            # Dynamically import the module
+            spec = importlib.util.spec_from_file_location(
+                f"connectors.{agent_name}_agent",
+                connector_file
+            )
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            
+            # Look for AgentClass in the module
+            if not hasattr(module, 'Agent'):
+                print(f"{C.RED}  ✗ No 'Agent' class found in {connector_file}{C.ENDC}")
+                return None
+            
+            agent_class = module.Agent
+
+            # Try to initialize with verbose flag if the agent supports it
+            try:
+                agent_instance = agent_class(verbose=self.verbose)
+            except TypeError:
+                # Agent doesn't support verbose parameter
+                agent_instance = agent_class()
+
+            # Set verbose as an attribute for agents that support it
+            if hasattr(agent_instance, 'verbose'):
+                agent_instance.verbose = self.verbose
+
+            # Initialize the agent
+            try:
+                await agent_instance.initialize()
+                
+                # Get agent capabilities
+                capabilities = await agent_instance.get_capabilities()
+                
+                if self.verbose:
+                    print(f"{C.GREEN}  ✓ Loaded {agent_name} with {len(capabilities)} capabilities{C.ENDC}")
+                    for cap in capabilities[:3]:  # Show first 3
+                        print(f"{C.GREEN}    - {cap}{C.ENDC}")
+                    if len(capabilities) > 3:
+                        print(f"{C.GREEN}    ... and {len(capabilities) - 3} more{C.ENDC}")
+                
+                return (agent_name, agent_instance, capabilities)
+                
+            except Exception as init_error:
+                print(f"{C.RED}  ✗ Failed to initialize {agent_name}: {init_error}{C.ENDC}")
+                if self.verbose:
+                    traceback.print_exc()
+                # Clean up the failed agent
+                try:
+                    if hasattr(agent_instance, 'cleanup'):
+                        await agent_instance.cleanup()
+                except:
+                    pass
+                return None
+                
+        except Exception as e:
+            # Always print errors
+            print(f"{C.RED}  ✗ Failed to load {agent_name}: {e}{C.ENDC}")
+            if self.verbose:
+                traceback.print_exc()
+            return None
+    
     async def discover_and_load_agents(self):
         """Automatically discover and load all agent connectors"""
         if self.verbose:
@@ -159,7 +232,7 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
             print(f"{C.YELLOW}{'='*60}{C.ENDC}\n")
         
         if not self.connectors_dir.exists():
-            print(f"{C.RED}❌ Connectors directory '{self.connectors_dir}' not found!{C.ENDC}")
+            print(f"{C.RED}✗ Connectors directory '{self.connectors_dir}' not found!{C.ENDC}")
             print(f"{C.YELLOW}Creating directory...{C.ENDC}")
             self.connectors_dir.mkdir(parents=True, exist_ok=True)
             return
@@ -172,50 +245,15 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
             print(f"{C.YELLOW}  Expected files matching pattern: *_agent.py{C.ENDC}")
             return
         
+        # Load agents sequentially to avoid concurrent initialization issues
         for connector_file in connector_files:
-            agent_name = connector_file.stem.replace("_agent", "")
-            if self.verbose:
-                print(f"{C.CYAN}📦 Loading: {C.BOLD}{agent_name}{C.ENDC}{C.CYAN} agent...{C.ENDC}")
-            
-            try:
-                # Dynamically import the module
-                spec = importlib.util.spec_from_file_location(
-                    f"connectors.{agent_name}_agent",
-                    connector_file
-                )
-                module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(module)
-                
-                # Look for AgentClass in the module
-                if hasattr(module, 'Agent'):
-                    agent_class = module.Agent
-                    agent_instance = agent_class()
-                    
-                    # Initialize the agent
-                    await agent_instance.initialize()
-                    
-                    # Get agent capabilities
-                    capabilities = await agent_instance.get_capabilities()
-                    
-                    # Store the agent
-                    self.sub_agents[agent_name] = agent_instance
-                    self.agent_capabilities[agent_name] = capabilities
-                    
-                    if self.verbose:
-                        print(f"{C.GREEN}  ✓ Loaded {agent_name} with {len(capabilities)} capabilities{C.ENDC}")
-                        for cap in capabilities[:3]:  # Show first 3
-                            print(f"{C.GREEN}    - {cap}{C.ENDC}")
-                        if len(capabilities) > 3:
-                            print(f"{C.GREEN}    ... and {len(capabilities) - 3} more{C.ENDC}")
-                else:
-                    print(f"{C.RED}  ✗ No 'Agent' class found in {connector_file}{C.ENDC}")
-                    
-            except Exception as e:
-                # Always print errors
-                print(f"{C.RED}  ✗ Failed to load {agent_name}: {e}{C.ENDC}")
-                traceback.print_exc()
+            result = await self._load_single_agent(connector_file)
+            if result:
+                agent_name, agent_instance, capabilities = result
+                self.sub_agents[agent_name] = agent_instance
+                self.agent_capabilities[agent_name] = capabilities
         
-        print(f"\n{C.GREEN}✅ Loaded {len(self.sub_agents)} agent(s) successfully.{C.ENDC}")
+        print(f"\n{C.GREEN}✓ Loaded {len(self.sub_agents)} agent(s) successfully.{C.ENDC}")
         if self.verbose:
             print(f"{C.YELLOW}{'='*60}{C.ENDC}\n")
     
@@ -297,7 +335,8 @@ Provide a clear instruction describing what you want to accomplish.""",
         except Exception as e:
             error_msg = f"Error executing {agent_name} agent: {str(e)}"
             print(f"{C.RED}✗ {error_msg}{C.ENDC}")
-            traceback.print_exc()
+            if self.verbose:
+                traceback.print_exc()
             return error_msg
     
     async def process_message(self, user_message: str) -> str:
@@ -412,7 +451,7 @@ Provide a clear instruction describing what you want to accomplish.""",
         if self.verbose:
             print(f"\n{C.YELLOW}Shutting down agents...{C.ENDC}")
             
-        for agent_name, agent in self.sub_agents.items():
+        for agent_name, agent in list(self.sub_agents.items()):
             try:
                 if hasattr(agent, 'cleanup'):
                     await agent.cleanup()
@@ -452,8 +491,9 @@ Provide a clear instruction describing what you want to accomplish.""",
                     
                 except Exception as e:
                     # Errors are always printed
-                    print(f"\n{C.RED}❌ An error occurred: {str(e)}{C.ENDC}")
-                    traceback.print_exc()
+                    print(f"\n{C.RED}✗ An error occurred: {str(e)}{C.ENDC}")
+                    if self.verbose:
+                        traceback.print_exc()
         
         finally:
             await self.cleanup()
@@ -484,4 +524,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
