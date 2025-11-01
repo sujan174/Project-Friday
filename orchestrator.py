@@ -20,6 +20,9 @@ from llms.gemini_flash import GeminiFlash
 from connectors.agent_intelligence import WorkspaceKnowledge, SharedContext
 from connectors.agent_logger import SessionLogger
 
+# Import terminal UI
+from ui.terminal_ui import TerminalUI, Colors as C_NEW, Icons
+
 load_dotenv()
 
 # === ANSI COLOR CODES ===
@@ -87,6 +90,9 @@ class OrchestratorAgent:
 
         # Session logging
         self.session_logger = SessionLogger(log_dir="logs", session_id=self.session_id)
+
+        # Terminal UI
+        self.ui = TerminalUI(verbose=self.verbose)
 
         if self.verbose:
             print(f"{C.CYAN}🧠 Intelligence enabled: Session {self.session_id[:8]}...{C.ENDC}")
@@ -184,27 +190,13 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
             await task  # This will still raise exceptions if the task fails
             return
 
-        spinner_chars = ['|', '/', '─', '\\']
-        start_time = asyncio.get_event_loop().time()
-        
-        # Hide cursor
-        print(f"\033[?25l{C.CYAN}   {spinner_chars[0]} {message}...{C.ENDC}", end='', flush=True)
-        
-        i = 0
-        while not task.done():
-            await asyncio.sleep(0.1)
-            i = (i + 1) % len(spinner_chars)
-            elapsed = asyncio.get_event_loop().time() - start_time
-            # Move cursor to beginning of line and print spinner
-            print(f"\r{C.CYAN}   {spinner_chars[i]} {message}... ({elapsed:.1f}s){C.ENDC}", end='', flush=True)
-        
-        # Task is done, check for exceptions
+        # Use new UI progress indicator
+        progress = self.ui.start_progress(message)
+
         try:
-            await task  # Re-await to raise exception if one occurred
+            await task  # This will raise exceptions if the task fails
         finally:
-            # Clear the line and show cursor
-            print(f"\r{' ' * 80}\r", end='', flush=True)
-            print("\033[?25h", end='', flush=True)
+            progress.stop()
     
     async def _load_single_agent(self, connector_file: Path) -> Optional[tuple]:
         """Load a single agent connector. Returns (agent_name, agent_instance, capabilities, messages) or None on failure."""
@@ -1044,38 +1036,62 @@ Provide a clear instruction describing what you want to accomplish.""",
     
     async def run_interactive(self):
         """Run interactive chat session"""
-        print(f"\n{C.YELLOW}{'='*60}{C.ENDC}")
-        print(f"{C.BOLD}{C.CYAN}🎭 Multi-Agent Orchestration System{C.ENDC}")
-        print(f"{C.YELLOW}Mode: {'Verbose' if self.verbose else 'Clean'}{C.ENDC}")
-        print(f"{C.YELLOW}{'='*60}{C.ENDC}\n")
-        
+        # Use new UI for non-verbose mode
+        if not self.verbose:
+            self.ui.print_header(self.session_id)
+        else:
+            # Old verbose header
+            print(f"\n{C.YELLOW}{'='*60}{C.ENDC}")
+            print(f"{C.BOLD}{C.CYAN}🎭 Multi-Agent Orchestration System{C.ENDC}")
+            print(f"{C.YELLOW}Mode: Verbose{C.ENDC}")
+            print(f"{C.YELLOW}{'='*60}{C.ENDC}\n")
+
         try:
             while True:
-                user_input = input(f"{C.BOLD}{C.BLUE}You: {C.ENDC}").strip()
-                
+                # Print prompt based on mode
+                if not self.verbose:
+                    self.ui.print_prompt()
+                    user_input = input().strip()
+                else:
+                    user_input = input(f"{C.BOLD}{C.BLUE}You: {C.ENDC}").strip()
+
                 if user_input.lower() in ['exit', 'quit', 'bye']:
-                    print(f"\n{C.GREEN}Goodbye! 👋{C.ENDC}")
+                    if not self.verbose:
+                        self.ui.print_goodbye()
+                    else:
+                        print(f"\n{C.GREEN}Goodbye! 👋{C.ENDC}")
                     break
-                
+
                 if not user_input:
                     continue
-                
+
                 if user_input.lower() == 'help':
                     self._show_help()
                     continue
-                
+
                 try:
+                    # Show thinking indicator in non-verbose mode
+                    if not self.verbose:
+                        self.ui.print_thinking()
+
                     # The spinners will play here
                     response = await self.process_message(user_input)
-                    # The final response is printed clearly
-                    print(f"\n{C.BOLD}{C.GREEN}🎭 Orchestrator:{C.ENDC}\n{response}\n")
-                    
+
+                    # Print response based on mode
+                    if not self.verbose:
+                        self.ui.print_response(response)
+                    else:
+                        # Old verbose response
+                        print(f"\n{C.BOLD}{C.GREEN}🎭 Orchestrator:{C.ENDC}\n{response}\n")
+
                 except Exception as e:
                     # Errors are always printed
-                    print(f"\n{C.RED}✗ An error occurred: {str(e)}{C.ENDC}")
-                    if self.verbose:
+                    if not self.verbose:
+                        self.ui.print_error(str(e))
+                    else:
+                        print(f"\n{C.RED}✗ An error occurred: {str(e)}{C.ENDC}")
                         traceback.print_exc()
-        
+
         finally:
             await self.cleanup()
     

@@ -522,8 +522,57 @@ Remember: Your goal is to help developers ship secure, performant, and maintaina
 
             llm_response = await self.llm.generate_content(instruction)
 
-            # Extract review text
-            review_text = llm_response.text if llm_response.text else str(llm_response)
+            # Check for RECITATION (finish_reason 12) - Gemini refusing due to potential copyrighted content
+            if llm_response.finish_reason and '12' in str(llm_response.finish_reason):
+                if self.verbose:
+                    print(f"[CODE REVIEWER] RECITATION detected - retrying with modified prompt")
+
+                # Retry with a prompt that asks for analysis rather than full review
+                modified_instruction = f"""Please provide a high-level analysis of this code focusing on:
+1. Architecture and design patterns used
+2. Potential security concerns (generic patterns only)
+3. Performance considerations
+4. Code quality improvements
+
+Do not reproduce or quote the code. Only provide analytical observations.
+
+{instruction}"""
+
+                llm_response = await self.llm.generate_content(modified_instruction)
+
+                # If still RECITATION, provide helpful error
+                if llm_response.finish_reason and '12' in str(llm_response.finish_reason):
+                    return """⚠️ Code Review Limited
+
+The code file is too large or complex for detailed review in a single request.
+
+Suggestions:
+• Break the code into smaller chunks (functions/classes)
+• Request review of specific sections
+• Ask about specific aspects (e.g., "review security" or "check performance")
+
+The system detected potential copyrighted content patterns in the large code block."""
+
+            # Extract review text safely
+            try:
+                review_text = llm_response.text if llm_response.text else ""
+            except Exception as text_error:
+                # If text accessor fails, check finish_reason and provide helpful message
+                finish_reason = llm_response.finish_reason or "unknown"
+                if self.verbose:
+                    print(f"[CODE REVIEWER] Text extraction failed. Finish reason: {finish_reason}")
+
+                # Provide helpful error based on finish_reason
+                review_text = f"""⚠️ Review Generation Issue
+
+The code review could not be completed. Finish reason: {finish_reason}
+
+This may occur when:
+• The code is too large (try smaller chunks)
+• The content triggers safety filters
+• The response format is unexpected
+
+Error details: {str(text_error)}"""
 
             # Parse issues from review (simple extraction for stats)
             issues = self._extract_issue_counts(review_text)

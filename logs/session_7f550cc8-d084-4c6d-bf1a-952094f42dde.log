@@ -27,3 +27,39 @@ requi...
 [+52.75s] ← code_reviewer ✓
   Response: This Node.js application, developed by Sandesh K, sets up an Express.js server t...
   Length: 1976 chars
+
+================================================================================
+SESSION SUMMARY
+================================================================================
+Duration: 9m 30.2s
+Total Messages: 4
+
+AGENT METRICS:
+--------------------------------------------------------------------------------
+
+CODE_REVIEWER:
+  Messages: 1 received, 1 sent
+  Tools: 2 called (2 ✓, 0 ✗)
+  Success Rate: 100.0%
+  Duration: 0.00s
+
+GITHUB:
+  Messages: 1 received, 1 sent
+  Tools: 0 called (0 ✓, 0 ✗)
+  Success Rate: 0.0%
+  Duration: 0.00s
+
+MESSAGE FLOW:
+--------------------------------------------------------------------------------
+  Time        code_revie  github    
+  ----------------------------------
+    34.3s                →         
+    39.4s                ←         
+    43.9s    →                     
+    52.7s    ←                     
+
+TOOL USAGE:
+--------------------------------------------------------------------------------
+  llm_code_analysis: 2 call(s)
+
+================================================================================
