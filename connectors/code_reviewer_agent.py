@@ -26,9 +26,6 @@ from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
 from datetime import datetime
 
-import google.generativeai as genai
-import google.generativeai.protos as protos
-
 from connectors.base_agent import BaseAgent
 from connectors.agent_intelligence import (
     ConversationMemory,
@@ -36,6 +33,8 @@ from connectors.agent_intelligence import (
     SharedContext,
     ProactiveAssistant
 )
+from llms.base_llm import BaseLLM, LLMConfig
+from llms.gemini_flash import GeminiFlash
 
 
 @dataclass
@@ -83,21 +82,29 @@ class Agent(BaseAgent):
     - Test coverage analysis
     """
 
-    def __init__(self, verbose: bool = False, shared_context: Optional[SharedContext] = None):
+    def __init__(self, verbose: bool = False, shared_context: Optional[SharedContext] = None, llm: Optional[BaseLLM] = None, **kwargs):
         """
         Initialize Code Reviewer Agent
 
         Args:
             verbose: Enable detailed logging
             shared_context: Optional shared context for cross-agent coordination
+            llm: Optional LLM instance (defaults to Gemini Flash)
         """
         super().__init__()
 
         self.verbose = verbose
         self.initialized = False
 
-        # LLM model for code analysis
-        self.model: Optional[genai.GenerativeModel] = None
+        # LLM abstraction for code analysis
+        if llm is None:
+            # Default to Gemini 2.5 Flash
+            self.llm = GeminiFlash(LLMConfig(
+                model_name='models/gemini-2.5-flash',
+                temperature=0.7
+            ))
+        else:
+            self.llm = llm
 
         # Intelligence components
         self.memory = ConversationMemory()
@@ -386,11 +393,8 @@ Remember: Your goal is to help developers ship secure, performant, and maintaina
             if self.verbose:
                 print(f"[CODE REVIEWER] Initializing...")
 
-            # Initialize Gemini model for code analysis
-            self.model = genai.GenerativeModel(
-                'models/gemini-2.5-flash',
-                system_instruction=self.system_prompt
-            )
+            # Set system instruction on LLM
+            self.llm.config.system_instruction = self.system_prompt
 
             self.initialized = True
 
@@ -398,7 +402,7 @@ Remember: Your goal is to help developers ship secure, performant, and maintaina
             await self._prefetch_metadata()
 
             if self.verbose:
-                print(f"[CODE REVIEWER] Initialization complete")
+                print(f"[CODE REVIEWER] Initialization complete with {self.llm}")
 
             return True
 
@@ -503,10 +507,10 @@ Remember: Your goal is to help developers ship secure, performant, and maintaina
             if self.verbose:
                 print(f"[CODE REVIEWER] Analyzing code...")
 
-            response = await self.model.generate_content_async(instruction)
+            llm_response = await self.llm.generate_content(instruction)
 
             # Extract review text
-            review_text = response.text if hasattr(response, 'text') else str(response)
+            review_text = llm_response.text if llm_response.text else str(llm_response)
 
             # Parse issues from review (simple extraction for stats)
             issues = self._extract_issue_counts(review_text)

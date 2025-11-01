@@ -12,6 +12,10 @@ from dotenv import load_dotenv
 from pathlib import Path
 import importlib.util
 
+# Import LLM abstraction layer
+from llms.base_llm import BaseLLM, LLMConfig
+from llms.gemini_flash import GeminiFlash
+
 # Import intelligence components for smart agents
 from connectors.agent_intelligence import WorkspaceKnowledge, SharedContext
 
@@ -38,13 +42,26 @@ genai.configure(api_key=GOOGLE_API_KEY)
 
 class OrchestratorAgent:
     """Main orchestration agent that coordinates specialized sub-agents"""
-    
-    def __init__(self, connectors_dir: str = "connectors", verbose: bool = False):
+
+    def __init__(self, connectors_dir: str = "connectors", verbose: bool = False, llm: Optional[BaseLLM] = None):
         self.connectors_dir = Path(connectors_dir)
         self.sub_agents: Dict[str, Any] = {}
         self.agent_capabilities: Dict[str, List[str]] = {}
         self.agent_health: Dict[str, Dict[str, Any]] = {}  # Track agent health status
         self.verbose = verbose  # Set to True for detailed logging
+
+        # LLM abstraction - use provided LLM or default to Gemini Flash
+        if llm is None:
+            # Default LLM: Gemini 2.5 Flash
+            self.llm = GeminiFlash(LLMConfig(
+                model_name='models/gemini-2.5-flash',
+                temperature=0.7
+            ))
+        else:
+            self.llm = llm
+
+        if self.verbose:
+            print(f"{C.CYAN}🧠 Using LLM: {self.llm}{C.ENDC}")
 
         # Intelligence components for smart cross-agent coordination
         self.knowledge_base = WorkspaceKnowledge()
@@ -212,21 +229,30 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
 
             agent_class = module.Agent
 
-            # Try to initialize with intelligence components (smart agents) or just verbose (legacy agents)
+            # Try to initialize with intelligence components (smart agents) or fallback to legacy
             try:
-                # Try with full intelligence support
+                # Try with full intelligence support + LLM abstraction
                 agent_instance = agent_class(
                     verbose=self.verbose,
                     shared_context=self.shared_context,
-                    knowledge_base=self.knowledge_base
+                    knowledge_base=self.knowledge_base,
+                    llm=self.llm
                 )
             except TypeError:
-                # Fallback: Try with just verbose
+                # Fallback: Try without LLM
                 try:
-                    agent_instance = agent_class(verbose=self.verbose)
+                    agent_instance = agent_class(
+                        verbose=self.verbose,
+                        shared_context=self.shared_context,
+                        knowledge_base=self.knowledge_base
+                    )
                 except TypeError:
-                    # Fallback: No parameters (legacy agent)
-                    agent_instance = agent_class()
+                    # Fallback: Try with just verbose
+                    try:
+                        agent_instance = agent_class(verbose=self.verbose)
+                    except TypeError:
+                        # Fallback: No parameters (legacy agent)
+                        agent_instance = agent_class()
 
             # Set verbose as an attribute for agents that support it
             if hasattr(agent_instance, 'verbose'):
@@ -456,35 +482,46 @@ Provide a clear instruction describing what you want to accomplish.""",
             # Run the discovery task with a spinner
             discover_task = asyncio.create_task(self.discover_and_load_agents())
             await self._spinner(discover_task, "Discovering agents")
-            
+
             if not self.sub_agents:
                 return "No agents available. Please add agent connectors to the 'connectors' directory."
-            
-            # Create model with agent tools
+
+            # Create model with agent tools using LLM abstraction
             agent_tools = self._create_agent_tools()
 
-            self.model = genai.GenerativeModel(
-                'models/gemini-2.5-flash',
-                system_instruction=self.system_prompt,
-                tools=agent_tools
+            # Set the system instruction on the LLM config
+            self.llm.config.system_instruction = self.system_prompt
+
+            # Set tools on the LLM (for Gemini, these are FunctionDeclarations)
+            self.llm.set_tools(agent_tools)
+
+            # Start chat session with function calling enabled
+            self.chat = self.llm.start_chat(
+                history=None,
+                enable_function_calling=True
             )
-            
-            self.chat = self.model.start_chat(history=self.conversation_history)
 
         # Reset operation counter for this request
         self.operation_count = 0
 
         # Create and run the initial send task with a spinner
-        send_task = asyncio.create_task(self.chat.send_message_async(user_message))
+        send_task = asyncio.create_task(self.chat.send_message(user_message))
         await self._spinner(send_task, "Thinking")
-        response = send_task.result()
-        
+        llm_response = send_task.result()
+
+        # Get the raw response object for compatibility
+        response = llm_response.metadata.get('response_object') if llm_response.metadata else None
+
         # Handle function calling loop
         # Increased from 15 to 30 for batch operations
         max_iterations = 30
         iteration = 0
-        
+
         while iteration < max_iterations:
+            # Ensure we have a valid response object
+            if not response or not hasattr(response, 'candidates') or not response.candidates:
+                break
+
             parts = response.candidates[0].content.parts
             has_function_call = any(
                 hasattr(part, 'function_call') and part.function_call 
@@ -529,20 +566,13 @@ Provide a clear instruction describing what you want to accomplish.""",
                         # User cancelled during ambiguity resolution
                         result = "⚠️ Operation cancelled by user"
                         # Skip to next iteration
+                        function_result = {'name': tool_name, 'result': result}
                         response_task = asyncio.create_task(
-                            self.chat.send_message_async(
-                                genai.protos.Content(
-                                    parts=[genai.protos.Part(
-                                        function_response=genai.protos.FunctionResponse(
-                                            name=tool_name,
-                                            response={"result": result}
-                                        )
-                                    )]
-                                )
-                            )
+                            self.chat.send_message_with_functions("", function_result)
                         )
                         await self._spinner(response_task, "Updating")
-                        response = response_task.result()
+                        llm_response = response_task.result()
+                        response = llm_response.metadata.get('response_object') if llm_response.metadata else None
                         iteration += 1
                         continue
                     instruction = enhanced_instruction
@@ -553,20 +583,13 @@ Provide a clear instruction describing what you want to accomplish.""",
                     if not confirmed:
                         result = "⚠️ Operation cancelled by user"
                         # Skip to next iteration
+                        function_result = {'name': tool_name, 'result': result}
                         response_task = asyncio.create_task(
-                            self.chat.send_message_async(
-                                genai.protos.Content(
-                                    parts=[genai.protos.Part(
-                                        function_response=genai.protos.FunctionResponse(
-                                            name=tool_name,
-                                            response={"result": result}
-                                        )
-                                    )]
-                                )
-                            )
+                            self.chat.send_message_with_functions("", function_result)
                         )
                         await self._spinner(response_task, "Updating")
-                        response = response_task.result()
+                        llm_response = response_task.result()
+                        response = llm_response.metadata.get('response_object') if llm_response.metadata else None
                         iteration += 1
                         continue
 
@@ -661,20 +684,19 @@ Provide a clear instruction describing what you want to accomplish.""",
                         result += f"\n\n💡 Tip: Try using discovery/validation before this operation"
             
             # Send result back to orchestrator with a spinner
+            function_result = {
+                'name': tool_name,
+                'result': result
+            }
+
             response_task = asyncio.create_task(
-                self.chat.send_message_async(
-                    genai.protos.Content(
-                        parts=[genai.protos.Part(
-                            function_response=genai.protos.FunctionResponse(
-                                name=tool_name,
-                                response={"result": result}
-                            )
-                        )]
-                    )
-                )
+                self.chat.send_message_with_functions("", function_result)
             )
             await self._spinner(response_task, "Synthesizing results")
-            response = response_task.result()
+            llm_response = response_task.result()
+
+            # Get raw response for next iteration
+            response = llm_response.metadata.get('response_object') if llm_response.metadata else None
             
             iteration += 1
         
@@ -686,26 +708,34 @@ Provide a clear instruction describing what you want to accomplish.""",
         if self.operation_count > 0 and self.verbose:
             print(f"\n{C.GREEN}✅ Completed {self.operation_count} operation(s){C.ENDC}\n")
 
-        self.conversation_history = self.chat.history
-
-        # Fix: Safely extract text from response, handle function calls gracefully
+        # Update conversation history
         try:
-            return response.text
+            self.conversation_history = self.chat.get_history()
         except Exception as e:
-            # If response.text fails (e.g., has unconverted function_call parts)
             if self.verbose:
-                print(f"{C.YELLOW}⚠ Could not extract text from response: {e}{C.ENDC}")
+                print(f"{C.YELLOW}⚠ Could not update conversation history: {e}{C.ENDC}")
 
-            # Try to extract text from parts manually
-            text_parts = []
-            for part in response.candidates[0].content.parts:
-                if hasattr(part, 'text') and part.text:
-                    text_parts.append(part.text)
+        # Extract text from final LLM response
+        if llm_response and llm_response.text:
+            return llm_response.text
 
-            if text_parts:
-                return '\n'.join(text_parts)
-            else:
-                return "⚠️ Task completed but response formatting failed. The operations were executed successfully."
+        # Fallback: Try to extract from raw response object
+        if response and hasattr(response, 'candidates') and response.candidates:
+            try:
+                # Try to get text property (may fail if there are function_call parts)
+                return response.text
+            except Exception:
+                # Manual extraction from parts
+                text_parts = []
+                for part in response.candidates[0].content.parts:
+                    if hasattr(part, 'text') and part.text:
+                        text_parts.append(part.text)
+
+                if text_parts:
+                    return '\n'.join(text_parts)
+
+        # If we still don't have text, return a generic message
+        return "⚠️ Task completed but response formatting failed. The operations were executed successfully."
     
     def _deep_convert_proto_args(self, value: Any) -> Any:
         """Recursively converts Protobuf composite types into standard Python dicts/lists"""
