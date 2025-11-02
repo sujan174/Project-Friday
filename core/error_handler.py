@@ -15,8 +15,9 @@ Version: 1.0
 """
 
 from enum import Enum
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
+import hashlib
 
 
 class ErrorCategory(str, Enum):
@@ -278,3 +279,219 @@ def format_error_for_user(
         message += f"**Technical details**: {classification.technical_details}\n"
 
     return message.strip()
+
+
+class DuplicateOperationDetector:
+    """
+    Detects when the same operation is being retried multiple times with identical failures.
+
+    This catches situations like:
+    - Agent keeps trying the same impossible operation
+    - Agent forgets it already executed something
+    - Stuck in retry loop for operation that will never succeed
+
+    Example from real session:
+    - Notion agent adds tasks successfully
+    - Then retries adding same tasks 10+ times
+    - Each time gives different/conflicting responses
+    - User keeps confirming thinking they're different operations
+    """
+
+    def __init__(self, window_size: int = 5, similarity_threshold: float = 0.8):
+        """
+        Initialize duplicate detector.
+
+        Args:
+            window_size: Number of recent operations to track
+            similarity_threshold: How similar errors need to be (0.0-1.0)
+        """
+        self.window_size = window_size
+        self.similarity_threshold = similarity_threshold
+        self.operation_history: Dict[str, List[Dict[str, Any]]] = {}
+
+    def _create_operation_hash(self, agent_name: str, instruction: str) -> str:
+        """Create a hash of the operation (agent + instruction)"""
+        key = f"{agent_name}:{instruction[:100]}"
+        return hashlib.md5(key.encode()).hexdigest()[:12]
+
+    def _similarity_score(self, error1: str, error2: str) -> float:
+        """
+        Calculate similarity between two error messages.
+
+        Returns: 0.0 (completely different) to 1.0 (identical)
+        """
+        if error1 == error2:
+            return 1.0
+
+        # Normalize to lowercase
+        e1 = error1.lower()
+        e2 = error2.lower()
+
+        # Check if one contains the other (high similarity)
+        if e1 in e2 or e2 in e1:
+            return 0.9
+
+        # Count matching words
+        words1 = set(e1.split())
+        words2 = set(e2.split())
+
+        if not words1 or not words2:
+            return 0.0
+
+        # Calculate Jaccard similarity
+        intersection = len(words1 & words2)
+        union = len(words1 | words2)
+
+        return intersection / union if union > 0 else 0.0
+
+    def track_operation(
+        self,
+        agent_name: str,
+        instruction: str,
+        error: str,
+        success: bool = False
+    ) -> None:
+        """
+        Track an operation attempt.
+
+        Args:
+            agent_name: Name of the agent
+            instruction: The instruction being executed
+            error: Error message (or empty if success)
+            success: Whether the operation succeeded
+        """
+        op_hash = self._create_operation_hash(agent_name, instruction)
+
+        if op_hash not in self.operation_history:
+            self.operation_history[op_hash] = []
+
+        # Add to history
+        self.operation_history[op_hash].append({
+            'error': error,
+            'success': success
+        })
+
+        # Keep only recent attempts
+        if len(self.operation_history[op_hash]) > self.window_size:
+            self.operation_history[op_hash] = self.operation_history[op_hash][-self.window_size:]
+
+    def detect_duplicate_failure(
+        self,
+        agent_name: str,
+        instruction: str,
+        current_error: str
+    ) -> Tuple[bool, Optional[str]]:
+        """
+        Detect if this operation has failed multiple times identically or similarly.
+
+        Returns:
+            (is_duplicate, explanation)
+            - is_duplicate: True if this looks like a stuck operation
+            - explanation: Description of what's happening
+        """
+        op_hash = self._create_operation_hash(agent_name, instruction)
+
+        if op_hash not in self.operation_history:
+            return False, None
+
+        history = self.operation_history[op_hash]
+
+        if len(history) < 2:
+            return False, None
+
+        # Get recent failed attempts
+        recent_failures = [h for h in history if not h['success']]
+
+        if len(recent_failures) < 2:
+            return False, None
+
+        # Check if errors are similar
+        error_messages = [f['error'] for f in recent_failures]
+
+        # Compare last error with previous ones
+        similar_count = 0
+        for prev_error in error_messages[:-1]:
+            similarity = self._similarity_score(current_error, prev_error)
+            if similarity >= self.similarity_threshold:
+                similar_count += 1
+
+        # If 2+ similar errors, it's a duplicate failure pattern
+        if similar_count >= 1:
+            num_attempts = len(recent_failures)
+            return True, (
+                f"This operation has been attempted {num_attempts} times with similar failures. "
+                f"The {agent_name} agent appears to be stuck or unable to complete this task."
+            )
+
+        # Check for conflicting responses (different errors for same operation)
+        if len(set(error_messages)) > 1 and len(recent_failures) >= 3:
+            return True, (
+                f"The {agent_name} agent is giving conflicting responses for the same operation. "
+                f"This suggests it's not properly tracking state or has a capability limitation."
+            )
+
+        return False, None
+
+    def detect_inconsistent_responses(
+        self,
+        agent_name: str,
+        instruction: str
+    ) -> Tuple[bool, Optional[List[str]]]:
+        """
+        Detect if agent is giving inconsistent responses (success/failure alternating).
+
+        Returns:
+            (is_inconsistent, response_pattern)
+            - is_inconsistent: True if responses are contradictory
+            - response_pattern: List of recent responses (success/failed)
+        """
+        op_hash = self._create_operation_hash(agent_name, instruction)
+
+        if op_hash not in self.operation_history:
+            return False, None
+
+        history = self.operation_history[op_hash]
+
+        if len(history) < 3:
+            return False, None
+
+        # Get recent attempts
+        recent = history[-5:]  # Last 5
+        pattern = ['success' if h['success'] else 'failed' for h in recent]
+
+        # Check for alternating or chaotic pattern
+        success_count = sum(1 for h in recent if h['success'])
+        failed_count = len(recent) - success_count
+
+        # If both successes AND failures in recent attempts, that's suspicious
+        if success_count > 0 and failed_count > 0 and len(recent) >= 3:
+            return True, pattern
+
+        return False, None
+
+    def get_duplicate_summary(
+        self,
+        agent_name: str,
+        instruction: str
+    ) -> Optional[str]:
+        """
+        Get a summary of duplicate/stuck operations for this agent+instruction.
+        """
+        op_hash = self._create_operation_hash(agent_name, instruction)
+
+        if op_hash not in self.operation_history:
+            return None
+
+        history = self.operation_history[op_hash]
+        total_attempts = len(history)
+        success_count = sum(1 for h in history if h['success'])
+        failed_count = total_attempts - success_count
+
+        if total_attempts < 2:
+            return None
+
+        return (
+            f"Attempt history: {total_attempts} total attempts "
+            f"({success_count} successful, {failed_count} failed)\n"
+            f"Status: This operation appears to be stuck or unstable"
+        )

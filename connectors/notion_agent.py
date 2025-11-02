@@ -33,7 +33,7 @@ from mcp.client.stdio import stdio_client
 
 # Add parent directory to path to import base_agent
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from connectors.base_agent import BaseAgent
+from connectors.base_agent import BaseAgent, safe_extract_response_text
 from connectors.agent_intelligence import (
     ConversationMemory,
     WorkspaceKnowledge,
@@ -856,12 +856,15 @@ Remember: You're not just executing commands—you're helping users build a powe
                 iteration += 1
 
             if iteration >= max_iterations:
+                # Safely extract response text
+                response_text = self._safe_extract_response_text(response)
                 return (
-                    f"{response.text}\n\n"
+                    f"{response_text}\n\n"
                     "⚠ Note: Reached maximum operation limit. The task may be incomplete."
                 )
 
-            final_response = response.text
+            # Safely extract response text
+            final_response = self._safe_extract_response_text(response)
 
             if self.verbose:
                 print(f"\n[NOTION AGENT] Execution complete. {self.stats.get_summary()}")
@@ -1179,6 +1182,102 @@ Remember: You're not just executing commands—you're helping users build a powe
             "✗ Cannot: Access pages without explicit sharing",
         ]
 
+    async def get_action_schema(self) -> Dict[str, Any]:
+        """
+        Return schema describing editable parameters for Notion actions.
+
+        This enables rich interactive editing of Notion pages before creation.
+
+        Returns:
+            Dict mapping action types to their parameter schemas
+        """
+        # Get available databases from cache
+        database_titles = []
+        if self.metadata_cache.get('databases'):
+            database_titles = [db.get('title', 'Untitled')
+                             for db in self.metadata_cache['databases'].values()]
+
+        return {
+            'create': {
+                'parameters': {
+                    'title': {
+                        'display_label': 'Page Title',
+                        'description': 'Title of the new Notion page',
+                        'type': 'string',
+                        'editable': True,
+                        'required': True,
+                        'constraints': {
+                            'min_length': 1,
+                            'max_length': 2000,
+                        },
+                        'examples': [
+                            'Meeting Notes - Product Sync',
+                            'Sprint Planning Q4 2024',
+                            'API Documentation v2.0'
+                        ]
+                    },
+                    'content': {
+                        'display_label': 'Page Content',
+                        'description': 'Content/body of the page (markdown supported)',
+                        'type': 'text',  # Multi-line
+                        'editable': True,
+                        'required': False,
+                        'examples': [
+                            '## Agenda\n- Review last sprint\n- Plan upcoming features',
+                            'This page documents the new API endpoints...'
+                        ]
+                    },
+                    'database': {
+                        'display_label': 'Database',
+                        'description': 'Database to create entry in (if creating database entry)',
+                        'type': 'string',
+                        'editable': True,
+                        'required': False,
+                        'constraints': {
+                            'allowed_values': database_titles if database_titles else None,
+                        },
+                        'examples': ['Project Tracker', 'Tasks', 'Meeting Notes']
+                    },
+                    'parent': {
+                        'display_label': 'Parent Page',
+                        'description': 'Parent page to nest this page under',
+                        'type': 'string',
+                        'editable': True,
+                        'required': False,
+                        'examples': ['Documentation', 'Engineering Workspace']
+                    }
+                }
+            },
+            'update': {
+                'parameters': {
+                    'page_id': {
+                        'display_label': 'Page ID',
+                        'description': 'ID of the page to update',
+                        'type': 'string',
+                        'editable': False,  # Can't change which page we're updating
+                        'required': True
+                    },
+                    'title': {
+                        'display_label': 'New Title',
+                        'description': 'New title for the page',
+                        'type': 'string',
+                        'editable': True,
+                        'required': False,
+                        'constraints': {
+                            'max_length': 2000,
+                        }
+                    },
+                    'content': {
+                        'display_label': 'New Content',
+                        'description': 'New content to add/replace',
+                        'type': 'text',
+                        'editable': True,
+                        'required': False
+                    }
+                }
+            }
+        }
+
     async def validate_operation(self, instruction: str) -> Dict[str, Any]:
         """
         Validate if a Notion operation can be performed (Feature #14)
@@ -1235,6 +1334,83 @@ Remember: You're not just executing commands—you're helping users build a powe
     def get_stats(self) -> str:
         """Get operation statistics summary"""
         return self.stats.get_summary()
+
+    async def apply_parameter_edits(
+        self,
+        instruction: str,
+        parameter_edits: Dict[str, Any]
+    ) -> str:
+        """
+        Apply user's edited parameters back into the instruction for Notion actions.
+
+        Args:
+            instruction: Original instruction from LLM
+            parameter_edits: {field_name: new_value} from user
+
+        Returns:
+            Modified instruction with edits applied
+
+        Example:
+            Original: "Create page titled 'Meeting Notes' with content 'Agenda items...'"
+            Edits: {'title': 'Sprint Planning Notes', 'content': '## Agenda\n- Review...'}
+            Return: "Create page titled 'Sprint Planning Notes' with content '## Agenda\n- Review...'"
+        """
+        import re
+
+        modified = instruction
+
+        # Apply title edits
+        if 'title' in parameter_edits:
+            new_title = parameter_edits['title']
+            patterns = [
+                (r"titled?\s+['\"]([^'\"]+)['\"]", f"titled '{new_title}'"),
+                (r"title\s+['\"]([^'\"]+)['\"]", f"title '{new_title}'"),
+                (r"page\s+['\"]([^'\"]+)['\"]", f"page '{new_title}'"),
+            ]
+
+            for pattern, replacement in patterns:
+                if re.search(pattern, modified, re.IGNORECASE):
+                    modified = re.sub(pattern, replacement, modified, count=1, flags=re.IGNORECASE)
+                    break
+
+        # Apply content edits
+        if 'content' in parameter_edits:
+            new_content = parameter_edits['content']
+            pattern = r"(content|with)\s+['\"]([^'\"]+)['\"]"
+            if re.search(pattern, modified, re.IGNORECASE):
+                modified = re.sub(pattern, f"content '{new_content}'", modified, count=1, flags=re.IGNORECASE)
+            else:
+                # Add content if not present
+                modified += f" with content '{new_content}'"
+
+        # Apply database edits
+        if 'database' in parameter_edits:
+            new_database = parameter_edits['database']
+            patterns = [
+                (r"in\s+database\s+['\"]([^'\"]+)['\"]", f"in database '{new_database}'"),
+                (r"database\s+['\"]([^'\"]+)['\"]", f"database '{new_database}'"),
+                (r"to\s+['\"]([^'\"]+)['\"]", f"to '{new_database}'"),
+            ]
+
+            for pattern, replacement in patterns:
+                if re.search(pattern, modified, re.IGNORECASE):
+                    modified = re.sub(pattern, replacement, modified, count=1, flags=re.IGNORECASE)
+                    break
+            else:
+                # Add database if not present
+                modified += f" in database '{new_database}'"
+
+        # Apply parent page edits
+        if 'parent' in parameter_edits:
+            new_parent = parameter_edits['parent']
+            pattern = r"under\s+['\"]([^'\"]+)['\"]"
+            if re.search(pattern, modified, re.IGNORECASE):
+                modified = re.sub(pattern, f"under '{new_parent}'", modified, count=1, flags=re.IGNORECASE)
+            else:
+                # Add parent if not present
+                modified += f" under '{new_parent}'"
+
+        return modified
 
     # ========================================================================
     # CLEANUP AND RESOURCE MANAGEMENT
@@ -1309,6 +1485,32 @@ Remember: You're not just executing commands—you're helping users build a powe
             schema_pb.required.extend(schema["required"])
 
         return schema_pb
+
+    def _safe_extract_response_text(self, response: Any) -> str:
+        """
+        Safely extract text from response object.
+
+        Handles cases where safe_extract_response_text(response) quick accessor fails due to function calls.
+        """
+        try:
+            # Try the quick accessor first
+            return safe_extract_response_text(response)
+        except Exception as e:
+            # If that fails, try manual extraction
+            try:
+                if response.candidates:
+                    text_parts = []
+                    for part in response.candidates[0].content.parts:
+                        if hasattr(part, 'text') and part.text:
+                            text_parts.append(part.text)
+
+                    if text_parts:
+                        return '\n'.join(text_parts)
+            except Exception:
+                pass
+
+            # If all else fails, return error message
+            return f"⚠️ Response received but could not extract text. Error: {str(e)}"
 
     def _deep_convert_proto_args(self, value: Any) -> Any:
         """Recursively convert protobuf types to standard Python types"""

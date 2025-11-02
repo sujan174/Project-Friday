@@ -26,7 +26,7 @@ from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
 from datetime import datetime
 
-from connectors.base_agent import BaseAgent
+from connectors.base_agent import BaseAgent, safe_extract_response_text
 from connectors.agent_intelligence import (
     ConversationMemory,
     WorkspaceKnowledge,
@@ -555,7 +555,7 @@ The system detected potential copyrighted content patterns in the large code blo
 
             # Extract review text safely
             try:
-                review_text = llm_response.text if llm_response.text else ""
+                review_text = llm_safe_extract_response_text(response) if llm_safe_extract_response_text(response) else ""
             except Exception as text_error:
                 # If text accessor fails, check finish_reason and provide helpful message
                 finish_reason = llm_response.finish_reason or "unknown"

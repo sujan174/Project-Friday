@@ -9,6 +9,8 @@ from typing import Any, Dict, List, Optional
 import google.generativeai as genai
 import google.generativeai.protos as protos
 from dotenv import load_dotenv
+
+
 from pathlib import Path
 import importlib.util
 
@@ -36,9 +38,9 @@ from ui.confirmation_ui import ConfirmationUI
 
 # Import production utilities
 from config import Config
-from logger import get_logger
-from input_validator import InputValidator
-from error_handler import ErrorClassifier, format_error_for_user
+from core.logger import get_logger
+from core.input_validator import InputValidator
+from core.error_handler import ErrorClassifier, format_error_for_user, DuplicateOperationDetector
 
 logger = get_logger(__name__)
 load_dotenv()
@@ -115,13 +117,15 @@ class OrchestratorAgent:
         self.session_id = str(uuid.uuid4())
         self.shared_context = SharedContext(self.session_id)
 
-        # Feature #20: Confirmation preferences
+        # Feature #20: Confirmation preferences (loaded from Config)
         self.confirmation_prefs = {
-            'always_confirm_deletes': True,
-            'always_confirm_bulk': True,
+            'always_confirm_deletes': Config.CONFIRM_DELETES,
+            'always_confirm_bulk': Config.CONFIRM_BULK_OPERATIONS,
             'bulk_threshold': 5,
-            'confirm_public_posts': True,
-            'confirm_ambiguous': True
+            'confirm_public_posts': Config.CONFIRM_PUBLIC_POSTS,
+            'confirm_ambiguous': True,
+            'confirm_slack_messages': Config.CONFIRM_SLACK_MESSAGES,  # Always confirm Slack messages (send/notify actions)
+            'confirm_jira_operations': Config.CONFIRM_JIRA_OPERATIONS,  # Always confirm Jira operations (create/update/delete)
         }
 
         # Track confirmations to avoid asking multiple times for same operation
@@ -130,6 +134,9 @@ class OrchestratorAgent:
         # Feature #8: Intelligent Retry tracking
         self.retry_tracker: Dict[str, Dict[str, Any]] = {}  # Track retry attempts per operation
         self.max_retry_attempts = 3  # Maximum retries before suggesting alternative
+
+        # Feature #21: Duplicate Operation Detection
+        self.duplicate_detector = DuplicateOperationDetector(window_size=5, similarity_threshold=0.8)
 
         # Feature #11: Simple progress tracking for streaming
         self.operation_count = 0  # Track number of operations in current request
@@ -762,20 +769,21 @@ Provide a clear instruction describing what you want to accomplish.""",
                 if self.verbose:
                     print(f"{C.CYAN}[QUEUE] Action queued for confirmation{C.ENDC}")
 
-                # Check if we should present batch now
-                if confirmation_queue.should_batch_now():
-                    batch = await confirmation_queue.prepare_batch()
-                    batch.mark_presented()
+                # IMPORTANT: Always present the batch immediately for single actions
+                # to avoid infinite loops where LLM keeps retrying
+                # For true batching, we'd need a smarter queueing strategy
+                batch = await confirmation_queue.prepare_batch()
+                batch.mark_presented()
 
-                    # Present to user
-                    confirmation_ui.present_batch(batch.actions)
+                # Present to user
+                confirmation_ui.present_batch(batch.actions)
 
-                    # Collect decisions
-                    decisions = confirmation_ui.collect_decisions(batch.actions)
-                    batch.mark_decisions_received()
+                # Collect decisions
+                decisions = confirmation_ui.collect_decisions(batch.actions)
+                batch.mark_decisions_received()
 
-                    # Process all actions in this batch
-                    for action_in_batch in batch.actions:
+                # Process all actions in this batch
+                for action_in_batch in batch.actions:
                         if action_in_batch.id in decisions['confirmed']:
                             # Apply user edits if any
                             final_instruction = action_in_batch.instruction
@@ -826,9 +834,9 @@ Provide a clear instruction describing what you want to accomplish.""",
                             llm_response = response_task.result()
                             response = llm_response.metadata.get('response_object') if llm_response.metadata else None
 
-                    confirmation_queue.archive_batch()
+                confirmation_queue.archive_batch()
 
-                # Don't execute yet - skip to next iteration to collect more or wait for batch
+                # Continue to next iteration after processing the batch
                 iteration += 1
                 continue
 
@@ -924,6 +932,9 @@ Provide a clear instruction describing what you want to accomplish.""",
                 if self.verbose:
                     print(f"{C.GREEN}✓ {agent_name} completed{C.ENDC}")
 
+                # Feature #21: Track successful operation in duplicate detector
+                self.duplicate_detector.track_operation(agent_name, instruction, "", success=True)
+
                 # Feature #8: Mark success if this was a retry
                 if retry_context:
                     self._mark_retry_success(operation_key, solution_used="retry with same parameters")
@@ -960,6 +971,9 @@ Provide a clear instruction describing what you want to accomplish.""",
             except Exception as e:
                 error_str = str(e)
 
+                # Track in duplicate detector
+                self.duplicate_detector.track_operation(agent_name, instruction, error_str, success=False)
+
                 # Classify the error intelligently
                 error_classification = ErrorClassifier.classify(error_str, agent_name)
 
@@ -970,6 +984,16 @@ Provide a clear instruction describing what you want to accomplish.""",
                 retry_ctx = self._get_retry_context(operation_key)
                 attempt_num = retry_ctx['attempt_number'] if retry_ctx else 1
 
+                # Check for duplicate/stuck operations
+                is_duplicate, dup_explanation = self.duplicate_detector.detect_duplicate_failure(
+                    agent_name, instruction, error_str
+                )
+
+                # Check for inconsistent responses
+                is_inconsistent, dup_pattern = self.duplicate_detector.detect_inconsistent_responses(
+                    agent_name, instruction
+                )
+
                 # Format error message with intelligent suggestions
                 result = format_error_for_user(
                     error_classification,
@@ -978,6 +1002,19 @@ Provide a clear instruction describing what you want to accomplish.""",
                     attempt_num,
                     self.max_retry_attempts
                 )
+
+                # Add duplicate/stuck operation warning
+                if is_duplicate and dup_explanation:
+                    result += f"\n\n⚠️ **DUPLICATE OPERATION DETECTED**\n{dup_explanation}"
+                    result += f"\n\nThis operation appears stuck. It will NOT be retried further."
+                    # Force stop retrying for duplicate operations
+                    error_classification.is_retryable = False
+
+                # Add inconsistent response warning
+                if is_inconsistent and dup_pattern:
+                    result += f"\n\n⚠️ **INCONSISTENT RESPONSES DETECTED**\n"
+                    result += f"Response pattern: {' → '.join(dup_pattern[-5:])}\n"
+                    result += f"The agent is giving conflicting results. Please verify manually."
 
                 # Add context-specific guidance
                 if not error_classification.is_retryable and attempt_num == 1:
@@ -994,6 +1031,10 @@ Provide a clear instruction describing what you want to accomplish.""",
                 # Log the classification for debugging
                 if self.verbose:
                     print(f"{C.CYAN}[ERROR CLASSIFICATION] Category: {error_classification.category.value}, Retryable: {error_classification.is_retryable}{C.ENDC}")
+                    if is_duplicate:
+                        print(f"{C.YELLOW}[DUPLICATE DETECTED] {dup_explanation}{C.ENDC}")
+                    if is_inconsistent:
+                        print(f"{C.YELLOW}[INCONSISTENT RESPONSES] Pattern: {dup_pattern}{C.ENDC}")
 
                 print(f"{C.RED}✗ {agent_name} agent failed: {e}{C.ENDC}")
             
@@ -1324,6 +1365,30 @@ Provide a clear instruction describing what you want to accomplish.""",
                         'reason': f'Found {len(databases)} databases. Which one should I use?',
                         'suggestions': [f"- {db.get('title', 'Untitled')}" for db in databases.values()]
                     }
+
+        # Slack message confirmation (if enabled)
+        if agent_name == 'slack' and self.confirmation_prefs.get('confirm_slack_messages', False):
+            # Check if this is a send/notify operation
+            slack_action_keywords = ['send', 'post', 'message', 'notify', 'broadcast', 'share']
+            if any(word in instruction_lower for word in slack_action_keywords):
+                return {
+                    'needs_confirmation': True,
+                    'risk_type': 'slack_message',
+                    'reason': 'Review and edit message before sending',
+                    'suggestions': []
+                }
+
+        # Jira operation confirmation (if enabled)
+        if agent_name == 'jira' and self.confirmation_prefs.get('confirm_jira_operations', False):
+            # Check if this is a create/update/delete operation
+            jira_action_keywords = ['create', 'update', 'modify', 'delete', 'transition', 'assign', 'add', 'edit']
+            if any(word in instruction_lower for word in jira_action_keywords):
+                return {
+                    'needs_confirmation': True,
+                    'risk_type': 'jira_operation',
+                    'reason': 'Review and edit Jira operation before executing',
+                    'suggestions': []
+                }
 
         return {'needs_confirmation': False}
 

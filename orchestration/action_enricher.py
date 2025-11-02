@@ -15,8 +15,8 @@ import re
 import asyncio
 from orchestration.action_model import Action, ActionType
 from config import Config
-from logger import get_logger
-from input_validator import InputValidator
+from core.logger import get_logger
+from core.input_validator import InputValidator
 
 logger = get_logger(__name__)
 

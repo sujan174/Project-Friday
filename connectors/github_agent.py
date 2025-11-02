@@ -33,7 +33,7 @@ from mcp.client.stdio import stdio_client
 
 # Add parent directory to path to import base_agent
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from connectors.base_agent import BaseAgent
+from connectors.base_agent import BaseAgent, safe_extract_response_text
 from connectors.agent_intelligence import (
     ConversationMemory,
     WorkspaceKnowledge,
@@ -1119,11 +1119,11 @@ Remember: GitHub is where the world builds software. Every issue you create, eve
 
             if iteration >= max_iterations:
                 return (
-                    f"{response.text}\n\n"
+                    f"{safe_extract_response_text(response)}\n\n"
                     "⚠ Note: Reached maximum operation limit. The task may be incomplete."
                 )
 
-            final_response = response.text
+            final_response = safe_extract_response_text(response)
 
             if self.verbose:
                 print(f"\n[GITHUB AGENT] Execution complete. {self.stats.get_summary()}")

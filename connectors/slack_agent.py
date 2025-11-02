@@ -33,7 +33,7 @@ from mcp.client.stdio import stdio_client
 
 # Add parent directory to path to import base_agent
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from connectors.base_agent import BaseAgent
+from connectors.base_agent import BaseAgent, safe_extract_response_text
 from connectors.agent_intelligence import (
     ConversationMemory,
     WorkspaceKnowledge,
@@ -830,9 +830,13 @@ Remember: Slack is the nervous system of distributed teams. Every message you cr
 
             # Fetch all channels (public + user's private)
             channels = await self._fetch_all_channels()
+            if self.verbose:
+                print(f"[SLACK AGENT] Prefetched {len(channels)} channels")
 
             # Fetch all users (limit to active users to avoid huge lists)
             users = await self._fetch_all_users()
+            if self.verbose:
+                print(f"[SLACK AGENT] Prefetched {len(users)} users")
 
             # Store in cache
             self.metadata_cache = {
@@ -926,6 +930,82 @@ Remember: Slack is the nervous system of distributed teams. Every message you cr
                 print(f"[SLACK AGENT] Could not fetch users: {e}")
             return {}
 
+    def get_cached_channels(self) -> Dict[str, Any]:
+        """
+        Get all prefetched channels from cache.
+
+        Returns:
+            Dict mapping channel ID to channel info (id, name, is_private, num_members)
+        """
+        return self.metadata_cache.get('channels', {})
+
+    def get_cached_channel_by_name(self, channel_name: str) -> Optional[Dict[str, Any]]:
+        """
+        Look up a channel by name from cache (fast lookup).
+
+        Args:
+            channel_name: Name of the channel (with or without #)
+
+        Returns:
+            Channel info dict or None if not found
+        """
+        # Normalize channel name (remove # if present)
+        name = channel_name.lstrip('#').lower()
+
+        # Search in cached channels
+        for channel_id, channel_info in self.get_cached_channels().items():
+            if channel_info['name'].lower() == name:
+                return channel_info
+
+        return None
+
+    def list_available_channels(self) -> List[str]:
+        """
+        Get list of all available channel names for user reference.
+
+        Returns:
+            List of channel names
+        """
+        channels = self.get_cached_channels()
+        return sorted([ch['name'] for ch in channels.values() if not ch.get('is_archived', False)])
+
+    def _get_cached_channels_response(self) -> Optional[str]:
+        """
+        Get cached channels formatted as JSON response (cache-first optimization).
+
+        This method returns the cached channels in the same format that the
+        slack_list_channels API would return, allowing us to avoid API calls
+        for frequently used channel listings.
+
+        Returns:
+            JSON string with channels data, or None if cache is empty
+        """
+        cached_channels = self.get_cached_channels()
+
+        # If cache is empty, return None to fall back to API call
+        if not cached_channels:
+            return None
+
+        # Convert cached channels to the format expected by the LLM
+        channels_list = []
+        for channel_id, channel_info in cached_channels.items():
+            channels_list.append({
+                'id': channel_info['id'],
+                'name': channel_info['name'],
+                'is_private': channel_info.get('is_private', False),
+                'is_archived': channel_info.get('is_archived', False),
+                'num_members': channel_info.get('num_members', 0)
+            })
+
+        # Format as JSON response
+        response_data = {
+            'channels': channels_list,
+            'cached': True,  # Mark that this came from cache
+            'timestamp': time.time()
+        }
+
+        return json.dumps(response_data)
+
     # ========================================================================
     # CORE EXECUTION ENGINE
     # ========================================================================
@@ -947,8 +1027,15 @@ Remember: Slack is the nervous system of distributed teams. Every message you cr
             if context_from_other_agents and self.verbose:
                 print(f"[SLACK AGENT] Found context from other agents")
 
-            # Use resolved instruction for the rest
-            instruction = resolved_instruction
+            # Step 3: OPTIMIZATION - Inject available channels into instruction
+            # This eliminates unnecessary slack_list_channels tool calls and prevents
+            # false positives where the LLM claims to complete actions without calling tools
+            instruction = self._inject_channel_context(resolved_instruction)
+
+            if instruction != resolved_instruction and self.verbose:
+                print(f"[SLACK AGENT] Injected channel context into instruction")
+
+            # Use instruction with injected context for the rest
             chat = self.model.start_chat()
             response = await chat.send_message_async(instruction)
 
@@ -985,12 +1072,13 @@ Remember: Slack is the nervous system of distributed teams. Every message you cr
                 iteration += 1
 
             if iteration >= max_iterations:
+                response_text = safe_extract_response_text(response)
                 return (
-                    f"{response.text}\n\n"
+                    f"{response_text}\n\n"
                     "⚠ Note: Reached maximum operation limit. The task may be incomplete."
                 )
 
-            final_response = response.text
+            final_response = safe_extract_response_text(response)
 
             if self.verbose:
                 print(f"\n[SLACK AGENT] Execution complete. {self.stats.get_summary()}")
@@ -1044,6 +1132,39 @@ Remember: Slack is the nervous system of distributed teams. Every message you cr
                 )
 
         return "; ".join(context_parts) if context_parts else ""
+
+    def _inject_channel_context(self, instruction: str) -> str:
+        """
+        Inject available Slack channels directly into the instruction.
+
+        This optimization prevents unnecessary slack_list_channels tool calls and
+        false positives where the LLM claims to complete actions without actually
+        calling the required tools. By providing channel information upfront, the LLM
+        can make better decisions about which channels exist and proceed directly to
+        action execution.
+
+        Args:
+            instruction: Original instruction from user
+
+        Returns:
+            Instruction with injected channel context
+        """
+        available_channels = self.list_available_channels()
+
+        # Only inject if we have cached channels
+        if not available_channels:
+            return instruction
+
+        # Build channel list for injection
+        channel_list = ", ".join(f"#{ch}" for ch in available_channels)
+
+        # Inject channel context into instruction
+        context = (
+            f"\n\n[Available Slack Channels: {channel_list}]\n"
+            f"[Note: Use these channels directly - no need to list channels first]"
+        )
+
+        return instruction + context
 
     def _remember_created_resources(self, response: str, instruction: str):
         """Extract and remember created resources from response"""
@@ -1112,6 +1233,15 @@ Remember: Slack is the nervous system of distributed teams. Every message you cr
         """Execute a tool with automatic retry on transient failures"""
         retry_count = 0
         delay = RetryConfig.INITIAL_DELAY
+
+        # OPTIMIZATION: Check cache first for slack_list_channels to avoid unnecessary API calls
+        if tool_name == "slack_list_channels":
+            cached_result = self._get_cached_channels_response()
+            if cached_result is not None:
+                if self.verbose:
+                    print(f"\n[SLACK AGENT] Using cached channels instead of API call")
+                self.stats.record_operation(tool_name, True, 0)
+                return cached_result, None
 
         while retry_count <= RetryConfig.MAX_RETRIES:
             try:
@@ -1309,6 +1439,97 @@ Remember: Slack is the nervous system of distributed teams. Every message you cr
             "✗ Cannot: Access private channels without membership",
         ]
 
+    async def get_action_schema(self) -> Dict[str, Any]:
+        """
+        Return schema describing editable parameters for Slack actions.
+
+        This enables rich interactive editing of Slack messages before sending.
+
+        Returns:
+            Dict mapping action types to their parameter schemas
+        """
+        # Get list of available channels for validation
+        channel_names = []
+        if self.metadata_cache.get('channels'):
+            channel_names = [f"#{ch['name']}" for ch in self.metadata_cache['channels'].values()
+                           if not ch.get('is_archived', False)]
+
+        return {
+            'send': {
+                'parameters': {
+                    'message': {
+                        'display_label': 'Message',
+                        'description': 'The message content to send',
+                        'type': 'text',  # Multi-line text
+                        'editable': True,
+                        'required': True,
+                        'constraints': {
+                            'min_length': 1,
+                            'max_length': 4000,  # Slack message limit
+                        },
+                        'examples': [
+                            'Team meeting at 3pm today',
+                            'Deployment completed successfully ✓',
+                            'Bug fix is ready for review: https://github.com/...'
+                        ]
+                    },
+                    'channel': {
+                        'display_label': 'Channel',
+                        'description': 'The channel or user to send the message to',
+                        'type': 'string',
+                        'editable': True,
+                        'required': True,
+                        'constraints': {
+                            'allowed_values': channel_names if channel_names else None,
+                        },
+                        'examples': ['#engineering', '#general', '@john']
+                    },
+                    'thread_ts': {
+                        'display_label': 'Thread Timestamp',
+                        'description': 'Reply in thread (timestamp of parent message)',
+                        'type': 'string',
+                        'editable': False,  # Thread context is usually determined by context
+                        'required': False
+                    }
+                }
+            },
+            'notify': {
+                'parameters': {
+                    'message': {
+                        'display_label': 'Notification Message',
+                        'description': 'The notification message to broadcast',
+                        'type': 'text',
+                        'editable': True,
+                        'required': True,
+                        'constraints': {
+                            'min_length': 1,
+                            'max_length': 4000,
+                        }
+                    },
+                    'channel': {
+                        'display_label': 'Channel',
+                        'description': 'Channel to notify',
+                        'type': 'string',
+                        'editable': True,
+                        'required': True,
+                        'constraints': {
+                            'allowed_values': channel_names if channel_names else None,
+                        }
+                    },
+                    'mention_type': {
+                        'display_label': 'Mention Type',
+                        'description': 'Who to mention (@channel, @here, or none)',
+                        'type': 'string',
+                        'editable': True,
+                        'required': False,
+                        'constraints': {
+                            'allowed_values': ['@channel', '@here', 'none']
+                        }
+                    }
+                }
+            }
+        }
+
     async def validate_operation(self, instruction: str) -> Dict[str, Any]:
         """
         Validate if a Slack operation can be performed (Feature #14)
@@ -1365,6 +1586,72 @@ Remember: Slack is the nervous system of distributed teams. Every message you cr
     def get_stats(self) -> str:
         """Get operation statistics summary"""
         return self.stats.get_summary()
+
+    async def apply_parameter_edits(
+        self,
+        instruction: str,
+        parameter_edits: Dict[str, Any]
+    ) -> str:
+        """
+        Apply user's edited parameters back into the instruction for Slack actions.
+
+        Args:
+            instruction: Original instruction from LLM
+            parameter_edits: {field_name: new_value} from user
+
+        Returns:
+            Modified instruction with edits applied
+
+        Example:
+            Original: "Send message 'Hello team' to #engineering"
+            Edits: {'message': 'Hello team! Deployment is complete.', 'channel': '#general'}
+            Return: "Send message 'Hello team! Deployment is complete.' to #general"
+        """
+        import re
+
+        modified = instruction
+
+        # Apply message edits
+        if 'message' in parameter_edits:
+            new_message = parameter_edits['message']
+            # Find message in quotes and replace
+            patterns = [
+                (r"message\s+['\"]([^'\"]+)['\"]", f"message '{new_message}'"),
+                (r"['\"]([^'\"]{10,})['\"]", f"'{new_message}'"),  # Long quoted strings are likely messages
+            ]
+
+            for pattern, replacement in patterns:
+                if re.search(pattern, modified, re.IGNORECASE):
+                    modified = re.sub(pattern, replacement, modified, count=1, flags=re.IGNORECASE)
+                    break
+
+        # Apply channel edits
+        if 'channel' in parameter_edits:
+            new_channel = parameter_edits['channel']
+            # Ensure channel has # prefix
+            if not new_channel.startswith('#') and not new_channel.startswith('@'):
+                new_channel = f"#{new_channel}"
+
+            patterns = [
+                (r"to\s+[#@]?\w+", f"to {new_channel}"),
+                (r"channel\s+[#@]?\w+", f"channel {new_channel}"),
+                (r"in\s+[#@]?\w+", f"in {new_channel}"),
+            ]
+
+            for pattern, replacement in patterns:
+                if re.search(pattern, modified, re.IGNORECASE):
+                    modified = re.sub(pattern, replacement, modified, count=1, flags=re.IGNORECASE)
+                    break
+
+        # Apply mention_type edits
+        if 'mention_type' in parameter_edits:
+            mention = parameter_edits['mention_type']
+            if mention and mention != 'none':
+                # Add mention to message if not already present
+                if mention not in modified:
+                    modified = modified.replace("'", f"' with {mention}", 1)
+
+        return modified
 
     # ========================================================================
     # CLEANUP AND RESOURCE MANAGEMENT

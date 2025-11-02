@@ -34,7 +34,7 @@ from mcp.client.stdio import stdio_client
 
 # Add parent directory to path to import base_agent
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from connectors.base_agent import BaseAgent
+from connectors.base_agent import BaseAgent, safe_extract_response_text
 from connectors.agent_intelligence import (
     ConversationMemory,
     WorkspaceKnowledge,
@@ -782,13 +782,13 @@ Remember: You're not just executing commands—you're helping users manage their
             # Check if we hit iteration limit
             if iteration >= max_iterations:
                 return (
-                    f"{response.text}\n\n"
+                    f"{safe_extract_response_text(response)}\n\n"
                     "⚠ Note: Reached maximum operation limit. The task may be incomplete. "
                     "Consider breaking this into smaller requests."
                 )
 
             # Step 4: Extract and remember created resources
-            final_response = response.text
+            final_response = safe_extract_response_text(response)
             self._remember_created_resources(final_response, resolved_instruction)
 
             # Step 5: Add proactive suggestions
@@ -1238,6 +1238,159 @@ Remember: You're not just executing commands—you're helping users manage their
             "✗ Cannot: Modify issue history or audit logs",
         ]
 
+    async def get_action_schema(self) -> Dict[str, Any]:
+        """
+        Return schema describing editable parameters for Jira actions.
+
+        This enables rich interactive editing of Jira issues before creation/update.
+
+        Returns:
+            Dict mapping action types to their parameter schemas
+        """
+        # Get available projects and issue types from cache
+        project_keys = []
+        issue_types = ['Bug', 'Task', 'Story', 'Epic', 'Subtask']
+        priorities = ['Highest', 'High', 'Medium', 'Low', 'Lowest']
+
+        if self.metadata_cache.get('projects'):
+            project_keys = list(self.metadata_cache['projects'].keys())
+
+        if self.metadata_cache.get('issue_types'):
+            issue_types = self.metadata_cache['issue_types']
+
+        return {
+            'create': {
+                'parameters': {
+                    'summary': {
+                        'display_label': 'Summary',
+                        'description': 'Brief title/summary of the issue',
+                        'type': 'string',
+                        'editable': True,
+                        'required': True,
+                        'constraints': {
+                            'min_length': 5,
+                            'max_length': 255,
+                        },
+                        'examples': [
+                            'Fix login page timeout issue',
+                            'Add user profile export feature',
+                            'Update API documentation'
+                        ]
+                    },
+                    'description': {
+                        'display_label': 'Description',
+                        'description': 'Detailed description of the issue',
+                        'type': 'text',  # Multi-line
+                        'editable': True,
+                        'required': False,
+                        'constraints': {
+                            'max_length': 10000,
+                        },
+                        'examples': [
+                            'Users are experiencing timeouts when logging in during peak hours...',
+                            'We need to allow users to export their profile data in CSV format...'
+                        ]
+                    },
+                    'project': {
+                        'display_label': 'Project',
+                        'description': 'Jira project key (e.g., KAN, PROJ)',
+                        'type': 'string',
+                        'editable': True,
+                        'required': True,
+                        'constraints': {
+                            'allowed_values': project_keys if project_keys else None,
+                        },
+                        'examples': ['KAN', 'PROJ', 'DEV']
+                    },
+                    'issue_type': {
+                        'display_label': 'Issue Type',
+                        'description': 'Type of issue (Bug, Task, Story, etc.)',
+                        'type': 'string',
+                        'editable': True,
+                        'required': True,
+                        'constraints': {
+                            'allowed_values': issue_types,
+                        }
+                    },
+                    'priority': {
+                        'display_label': 'Priority',
+                        'description': 'Priority level for the issue',
+                        'type': 'string',
+                        'editable': True,
+                        'required': False,
+                        'constraints': {
+                            'allowed_values': priorities,
+                        }
+                    },
+                    'assignee': {
+                        'display_label': 'Assignee',
+                        'description': 'User to assign the issue to',
+                        'type': 'string',
+                        'editable': True,
+                        'required': False,
+                        'examples': ['john@company.com', 'unassigned']
+                    },
+                    'labels': {
+                        'display_label': 'Labels',
+                        'description': 'Labels/tags for the issue (comma-separated)',
+                        'type': 'string',
+                        'editable': True,
+                        'required': False,
+                        'examples': ['backend,urgent', 'frontend,ui']
+                    }
+                }
+            },
+            'update': {
+                'parameters': {
+                    'issue_key': {
+                        'display_label': 'Issue Key',
+                        'description': 'The issue to update (e.g., KAN-123)',
+                        'type': 'string',
+                        'editable': False,  # Can't change which issue we're updating
+                        'required': True
+                    },
+                    'summary': {
+                        'display_label': 'Summary',
+                        'description': 'New summary/title for the issue',
+                        'type': 'string',
+                        'editable': True,
+                        'required': False,
+                        'constraints': {
+                            'min_length': 5,
+                            'max_length': 255,
+                        }
+                    },
+                    'description': {
+                        'display_label': 'Description',
+                        'description': 'New description for the issue',
+                        'type': 'text',
+                        'editable': True,
+                        'required': False,
+                        'constraints': {
+                            'max_length': 10000,
+                        }
+                    },
+                    'priority': {
+                        'display_label': 'Priority',
+                        'description': 'New priority level',
+                        'type': 'string',
+                        'editable': True,
+                        'required': False,
+                        'constraints': {
+                            'allowed_values': priorities,
+                        }
+                    },
+                    'assignee': {
+                        'display_label': 'Assignee',
+                        'description': 'New assignee for the issue',
+                        'type': 'string',
+                        'editable': True,
+                        'required': False
+                    }
+                }
+            }
+        }
+
     async def validate_operation(self, instruction: str) -> Dict[str, Any]:
         """
         Validate if a Jira operation can be performed (Feature #14)
@@ -1298,6 +1451,108 @@ Remember: You're not just executing commands—you're helping users manage their
             Human-readable statistics summary
         """
         return self.stats.get_summary()
+
+    async def apply_parameter_edits(
+        self,
+        instruction: str,
+        parameter_edits: Dict[str, Any]
+    ) -> str:
+        """
+        Apply user's edited parameters back into the instruction for Jira actions.
+
+        Args:
+            instruction: Original instruction from LLM
+            parameter_edits: {field_name: new_value} from user
+
+        Returns:
+            Modified instruction with edits applied
+
+        Example:
+            Original: "Create issue in KAN with summary 'Bug fix' description 'System crash'"
+            Edits: {'summary': 'Critical: System crash', 'priority': 'High'}
+            Return: "Create issue in KAN with summary 'Critical: System crash' description 'System crash' priority 'High'"
+        """
+        import re
+
+        modified = instruction
+
+        # Apply summary/title edits
+        if 'summary' in parameter_edits or 'title' in parameter_edits:
+            new_summary = parameter_edits.get('summary') or parameter_edits.get('title')
+            patterns = [
+                (r"summary\s+['\"]([^'\"]+)['\"]", f"summary '{new_summary}'"),
+                (r"title\s+['\"]([^'\"]+)['\"]", f"title '{new_summary}'"),
+            ]
+
+            for pattern, replacement in patterns:
+                if re.search(pattern, modified, re.IGNORECASE):
+                    modified = re.sub(pattern, replacement, modified, count=1, flags=re.IGNORECASE)
+                    break
+
+        # Apply description edits
+        if 'description' in parameter_edits:
+            new_desc = parameter_edits['description']
+            pattern = r"description\s+['\"]([^'\"]+)['\"]"
+            if re.search(pattern, modified, re.IGNORECASE):
+                modified = re.sub(pattern, f"description '{new_desc}'", modified, count=1, flags=re.IGNORECASE)
+            else:
+                # Add description if not present
+                modified += f" description '{new_desc}'"
+
+        # Apply project edits
+        if 'project' in parameter_edits:
+            new_project = parameter_edits['project']
+            patterns = [
+                (r"in\s+([A-Z]{2,10})", f"in {new_project}"),
+                (r"project\s+([A-Z]{2,10})", f"project {new_project}"),
+            ]
+
+            for pattern, replacement in patterns:
+                if re.search(pattern, modified):
+                    modified = re.sub(pattern, replacement, modified, count=1)
+                    break
+
+        # Apply priority edits
+        if 'priority' in parameter_edits:
+            new_priority = parameter_edits['priority']
+            pattern = r"priority\s+\w+"
+            if re.search(pattern, modified, re.IGNORECASE):
+                modified = re.sub(pattern, f"priority {new_priority}", modified, count=1, flags=re.IGNORECASE)
+            else:
+                # Add priority if not present
+                modified += f" priority {new_priority}"
+
+        # Apply assignee edits
+        if 'assignee' in parameter_edits:
+            new_assignee = parameter_edits['assignee']
+            pattern = r"assign(ee)?\s+(to\s+)?['\"]?([^'\"]+)['\"]?"
+            if re.search(pattern, modified, re.IGNORECASE):
+                modified = re.sub(pattern, f"assign to {new_assignee}", modified, count=1, flags=re.IGNORECASE)
+            else:
+                # Add assignee if not present
+                modified += f" assign to {new_assignee}"
+
+        # Apply issue_type edits
+        if 'issue_type' in parameter_edits:
+            new_type = parameter_edits['issue_type']
+            pattern = r"(type|issue_type)\s+\w+"
+            if re.search(pattern, modified, re.IGNORECASE):
+                modified = re.sub(pattern, f"type {new_type}", modified, count=1, flags=re.IGNORECASE)
+            else:
+                # Add type if not present
+                modified += f" type {new_type}"
+
+        # Apply labels edits
+        if 'labels' in parameter_edits:
+            new_labels = parameter_edits['labels']
+            pattern = r"labels?\s+['\"]?([^'\"]+)['\"]?"
+            if re.search(pattern, modified, re.IGNORECASE):
+                modified = re.sub(pattern, f"labels {new_labels}", modified, count=1, flags=re.IGNORECASE)
+            else:
+                # Add labels if not present
+                modified += f" labels {new_labels}"
+
+        return modified
 
     # ========================================================================
     # CLEANUP AND RESOURCE MANAGEMENT

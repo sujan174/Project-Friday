@@ -139,7 +139,7 @@ class WorkspaceKnowledge:
     - "Critical bugs get #critical-bugs notification"
     """
 
-    def __init__(self, knowledge_file: str = 'workspace_knowledge.json'):
+    def __init__(self, knowledge_file: str = 'data/workspace_knowledge.json'):
         """
         Initialize workspace knowledge
 

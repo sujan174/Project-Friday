@@ -6,6 +6,7 @@ Presents multiple pending actions for user review, approval, rejection, and edit
 
 from typing import Dict, List, Optional, Tuple
 from orchestration.action_model import Action, ActionStatus, RiskLevel
+from ui.interactive_editor import InteractiveActionEditor
 
 
 # ANSI Color codes
@@ -28,6 +29,7 @@ class ConfirmationUI:
 
     def __init__(self, verbose: bool = False):
         self.verbose = verbose
+        self.editor = InteractiveActionEditor()  # Rich interactive editor
 
     def present_batch(self, actions: List[Action]) -> None:
         """
@@ -185,46 +187,11 @@ class ConfirmationUI:
 
     def _edit_action_interactive(self, action: Action) -> Optional[Dict[str, any]]:
         """
-        Let user edit a single action's parameters.
+        Let user edit a single action's parameters using the rich interactive editor.
         Returns dict of field edits, or None if cancelled/skipped.
         """
-
-        edits = {}
-
-        print(f"\n{Colors.CYAN}{'─'*60}{Colors.ENDC}")
-        print(f"{Colors.BOLD}Editing: {action.action_type.value} (Agent: {action.agent_name}){Colors.ENDC}")
-        print(f"{Colors.CYAN}{'─'*60}{Colors.ENDC}\n")
-
-        editable_fields = {f: action.field_info[f] for f in action.field_info
-                          if action.field_info[f].editable}
-
-        if not editable_fields:
-            print(f"{Colors.YELLOW}No editable fields for this action{Colors.ENDC}\n")
-            return None
-
-        for field_name, field_info in editable_fields.items():
-            print(f"{Colors.BOLD}{field_info.display_label}{Colors.ENDC}")
-            print(f"  {field_info.description}")
-            print(f"  Current: {field_info.current_value}")
-
-            if field_info.constraints.allowed_values:
-                print(f"  Allowed: {field_info.constraints.allowed_values}")
-
-            if field_info.examples:
-                print(f"  Examples: {', '.join(field_info.examples[:2])}")
-
-            new_value = input(f"{Colors.BOLD}  New value (Enter to skip): {Colors.ENDC}").strip()
-
-            if new_value:
-                # Validate
-                is_valid, error = field_info.constraints.validate(new_value)
-                if is_valid:
-                    edits[field_name] = new_value
-                    print(f"  {Colors.GREEN}✓ Updated{Colors.ENDC}\n")
-                else:
-                    print(f"  {Colors.RED}✗ {error}{Colors.ENDC}\n")
-
-        return edits if edits else None
+        # Use the rich interactive editor
+        return self.editor.edit_action(action)
 
     def show_action_with_edits(self, action: Action) -> None:
         """Show an action with user's edits highlighted"""

@@ -20,6 +20,40 @@ from typing import List, Dict, Any, Optional
 import traceback
 
 
+def safe_extract_response_text(response: Any) -> str:
+    """
+    Safely extract text from Gemini response objects.
+
+    Handles cases where response.text quick accessor fails due to function calls.
+    This is a common issue across all agents using the Gemini API.
+
+    Args:
+        response: A Gemini response object
+
+    Returns:
+        str: Extracted text or error message
+    """
+    try:
+        # Try the quick accessor first (fast path)
+        return response.text
+    except Exception as e:
+        # If that fails, try manual extraction from response parts
+        try:
+            if hasattr(response, 'candidates') and response.candidates:
+                text_parts = []
+                for part in response.candidates[0].content.parts:
+                    if hasattr(part, 'text') and part.text:
+                        text_parts.append(part.text)
+
+                if text_parts:
+                    return '\n'.join(text_parts)
+        except Exception:
+            pass
+
+        # Graceful degradation: return error message instead of crashing
+        return f"⚠️ Response received but could not extract text. Error: {str(e)}"
+
+
 # ============================================================================
 # BASE AGENT ABSTRACT CLASS
 # ============================================================================

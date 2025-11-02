@@ -36,9 +36,34 @@ class Config:
     ENABLE_INPUT_SANITIZATION = os.getenv('ENABLE_SANITIZATION', 'true').lower() == 'true'
     MAX_REGEX_PATTERN_LENGTH = int(os.getenv('MAX_REGEX_LENGTH', '1000'))
 
-    # Logging
+    # Confirmation Preferences
+    CONFIRM_SLACK_MESSAGES = os.getenv('CONFIRM_SLACK_MESSAGES', 'true').lower() == 'true'
+    CONFIRM_JIRA_OPERATIONS = os.getenv('CONFIRM_JIRA_OPERATIONS', 'true').lower() == 'true'
+    CONFIRM_DELETES = os.getenv('CONFIRM_DELETES', 'true').lower() == 'true'
+    CONFIRM_BULK_OPERATIONS = os.getenv('CONFIRM_BULK_OPERATIONS', 'true').lower() == 'true'
+    CONFIRM_PUBLIC_POSTS = os.getenv('CONFIRM_PUBLIC_POSTS', 'true').lower() == 'true'
+
+    # Logging Configuration
     LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
+    LOG_DIR = os.getenv('LOG_DIR', 'logs')
+    ENABLE_FILE_LOGGING = os.getenv('ENABLE_FILE_LOGGING', 'true').lower() == 'true'
+    ENABLE_JSON_LOGGING = os.getenv('ENABLE_JSON_LOGGING', 'true').lower() == 'true'
+    ENABLE_CONSOLE_LOGGING = os.getenv('ENABLE_CONSOLE_LOGGING', 'true').lower() == 'true'
+    ENABLE_COLORED_LOGS = os.getenv('ENABLE_COLORED_LOGS', 'true').lower() == 'true'
+    MAX_LOG_FILE_SIZE_MB = int(os.getenv('MAX_LOG_FILE_SIZE_MB', '10'))
+    LOG_BACKUP_COUNT = int(os.getenv('LOG_BACKUP_COUNT', '5'))
     VERBOSE = os.getenv('VERBOSE', 'false').lower() == 'true'
+
+    # Per-module log levels (can be overridden in environment)
+    PER_MODULE_LOG_LEVELS = {
+        'orchestrator': os.getenv('LOG_LEVEL_ORCHESTRATOR', LOG_LEVEL),
+        'connectors.slack_agent': os.getenv('LOG_LEVEL_SLACK', LOG_LEVEL),
+        'connectors.jira_agent': os.getenv('LOG_LEVEL_JIRA', LOG_LEVEL),
+        'connectors.github_agent': os.getenv('LOG_LEVEL_GITHUB', LOG_LEVEL),
+        'connectors.notion_agent': os.getenv('LOG_LEVEL_NOTION', LOG_LEVEL),
+        'error_handler': os.getenv('LOG_LEVEL_ERROR_HANDLER', LOG_LEVEL),
+        'intelligence': os.getenv('LOG_LEVEL_INTELLIGENCE', LOG_LEVEL),
+    }
 
     @classmethod
     def get_config(cls) -> Dict[str, Any]:

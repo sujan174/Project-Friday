@@ -33,7 +33,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from dotenv import load_dotenv
 
-from connectors.base_agent import BaseAgent
+from connectors.base_agent import BaseAgent, safe_extract_response_text
 from connectors.agent_intelligence import (
     ConversationMemory,
     WorkspaceKnowledge,
@@ -521,7 +521,7 @@ Remember: Web scraping is a powerful tool for data collection. Use it ethically,
                 return "⚠️ Maximum scraping iterations reached. Task may be too complex."
 
             # Extract final text response
-            final_response = response.text if hasattr(response, 'text') else str(response)
+            final_response = safe_extract_response_text(response) if hasattr(response, 'text') else str(response)
 
             if self.verbose:
                 print(f"\n[SCRAPER AGENT] Execution complete. {self.stats.get_summary()}")
