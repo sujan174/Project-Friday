@@ -2,15 +2,19 @@
 Base Types for Intelligence System
 
 Defines core data structures used across all intelligence components.
+Enhanced with immutability, validation, and rich type support.
 
 Author: AI System
-Version: 2.0
+Version: 3.0 - Major refactoring with enterprise-grade patterns
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple, Union, Callable
 from enum import Enum
 from datetime import datetime
+from abc import ABC, abstractmethod
+import hashlib
+import json
 
 
 # ============================================================================
@@ -338,3 +342,323 @@ class Optimization:
     estimated_savings: Dict[str, float]  # {'tokens': 100, 'time': 2.5, 'cost': 0.01}
     implementation: str
     confidence: float = 0.8
+
+
+# ============================================================================
+# SEMANTIC AND EMBEDDING TYPES
+# ============================================================================
+
+@dataclass
+class SemanticVector:
+    """Semantic embedding vector for similarity computations"""
+    vector: List[float]
+    dimension: int
+    model: str = "default"
+
+    def cosine_similarity(self, other: 'SemanticVector') -> float:
+        """Calculate cosine similarity with another vector"""
+        if self.dimension != other.dimension:
+            raise ValueError("Vectors must have same dimension")
+
+        dot_product = sum(a * b for a, b in zip(self.vector, other.vector))
+        magnitude_a = sum(a * a for a in self.vector) ** 0.5
+        magnitude_b = sum(b * b for b in other.vector) ** 0.5
+
+        if magnitude_a == 0 or magnitude_b == 0:
+            return 0.0
+
+        return dot_product / (magnitude_a * magnitude_b)
+
+
+@dataclass
+class SemanticMatch:
+    """Result of semantic similarity search"""
+    item_id: str
+    similarity_score: float
+    item: Any
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+# ============================================================================
+# PIPELINE AND PROCESSING TYPES
+# ============================================================================
+
+class ProcessingStage(Enum):
+    """Stages in intelligence processing pipeline"""
+    PREPROCESSING = "preprocessing"
+    INTENT_CLASSIFICATION = "intent_classification"
+    ENTITY_EXTRACTION = "entity_extraction"
+    CONTEXT_INTEGRATION = "context_integration"
+    TASK_DECOMPOSITION = "task_decomposition"
+    CONFIDENCE_SCORING = "confidence_scoring"
+    DECISION_MAKING = "decision_making"
+
+
+@dataclass
+class ProcessingResult:
+    """Result from a processing stage"""
+    stage: ProcessingStage
+    success: bool
+    data: Dict[str, Any]
+    latency_ms: float
+    errors: List[str] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    timestamp: datetime = field(default_factory=datetime.now)
+
+
+@dataclass
+class PipelineContext:
+    """Context passed through processing pipeline"""
+    message: str
+    session_id: str
+    user_id: Optional[str] = None
+    intents: List[Intent] = field(default_factory=list)
+    entities: List[Entity] = field(default_factory=list)
+    confidence: Optional[Confidence] = None
+    execution_plan: Optional[ExecutionPlan] = None
+    conversation_context: Optional[Dict] = None
+    processing_results: List[ProcessingResult] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def add_result(self, result: ProcessingResult):
+        """Add processing result"""
+        self.processing_results.append(result)
+
+    def get_stage_result(self, stage: ProcessingStage) -> Optional[ProcessingResult]:
+        """Get result from specific stage"""
+        for result in reversed(self.processing_results):
+            if result.stage == stage:
+                return result
+        return None
+
+
+# ============================================================================
+# RELATIONSHIP AND GRAPH TYPES
+# ============================================================================
+
+class RelationType(Enum):
+    """Types of relationships between entities"""
+    ASSIGNED_TO = "assigned_to"
+    CREATED_BY = "created_by"
+    DEPENDS_ON = "depends_on"
+    RELATED_TO = "related_to"
+    PART_OF = "part_of"
+    LINKED_TO = "linked_to"
+    MENTIONS = "mentions"
+    REFERENCES = "references"
+
+
+@dataclass
+class EntityRelationship:
+    """Relationship between two entities"""
+    from_entity_id: str
+    to_entity_id: str
+    relation_type: RelationType
+    confidence: float
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=datetime.now)
+
+
+@dataclass
+class EntityGraph:
+    """Graph of entities and their relationships"""
+    entities: Dict[str, Entity] = field(default_factory=dict)
+    relationships: List[EntityRelationship] = field(default_factory=list)
+
+    def add_entity(self, entity_id: str, entity: Entity):
+        """Add entity to graph"""
+        self.entities[entity_id] = entity
+
+    def add_relationship(self, relationship: EntityRelationship):
+        """Add relationship to graph"""
+        self.relationships.append(relationship)
+
+    def get_related_entities(
+        self,
+        entity_id: str,
+        relation_type: Optional[RelationType] = None
+    ) -> List[Tuple[RelationType, str, Entity]]:
+        """Get entities related to given entity"""
+        related = []
+        for rel in self.relationships:
+            if rel.from_entity_id == entity_id:
+                if relation_type is None or rel.relation_type == relation_type:
+                    if rel.to_entity_id in self.entities:
+                        related.append((
+                            rel.relation_type,
+                            rel.to_entity_id,
+                            self.entities[rel.to_entity_id]
+                        ))
+        return related
+
+
+# ============================================================================
+# CACHING TYPES
+# ============================================================================
+
+@dataclass
+class CacheEntry:
+    """Entry in cache"""
+    key: str
+    value: Any
+    created_at: datetime
+    last_accessed: datetime
+    access_count: int
+    ttl_seconds: Optional[float] = None
+
+    def is_expired(self) -> bool:
+        """Check if entry is expired"""
+        if self.ttl_seconds is None:
+            return False
+        age = (datetime.now() - self.created_at).total_seconds()
+        return age > self.ttl_seconds
+
+    def touch(self):
+        """Update last accessed time"""
+        self.last_accessed = datetime.now()
+        self.access_count += 1
+
+
+# ============================================================================
+# METRICS AND MONITORING TYPES
+# ============================================================================
+
+@dataclass
+class MetricPoint:
+    """Single metric data point"""
+    name: str
+    value: float
+    unit: str
+    timestamp: datetime = field(default_factory=datetime.now)
+    tags: Dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class PerformanceMetrics:
+    """Performance metrics for intelligence system"""
+    total_latency_ms: float = 0.0
+    intent_classification_ms: float = 0.0
+    entity_extraction_ms: float = 0.0
+    context_integration_ms: float = 0.0
+    task_decomposition_ms: float = 0.0
+    confidence_scoring_ms: float = 0.0
+    cache_hits: int = 0
+    cache_misses: int = 0
+    llm_calls: int = 0
+    llm_tokens: int = 0
+
+    def to_dict(self) -> Dict[str, float]:
+        """Convert to dictionary"""
+        return {
+            'total_latency_ms': self.total_latency_ms,
+            'intent_classification_ms': self.intent_classification_ms,
+            'entity_extraction_ms': self.entity_extraction_ms,
+            'context_integration_ms': self.context_integration_ms,
+            'task_decomposition_ms': self.task_decomposition_ms,
+            'confidence_scoring_ms': self.confidence_scoring_ms,
+            'cache_hit_rate': self.cache_hits / max(self.cache_hits + self.cache_misses, 1),
+            'llm_calls': self.llm_calls,
+            'llm_tokens': self.llm_tokens,
+        }
+
+
+@dataclass
+class QualityMetrics:
+    """Quality metrics for intelligence outputs"""
+    intent_accuracy: float = 0.0
+    entity_precision: float = 0.0
+    entity_recall: float = 0.0
+    confidence_calibration: float = 0.0
+    user_satisfaction: float = 0.0
+    task_success_rate: float = 0.0
+
+    def to_dict(self) -> Dict[str, float]:
+        """Convert to dictionary"""
+        return {
+            'intent_accuracy': self.intent_accuracy,
+            'entity_precision': self.entity_precision,
+            'entity_recall': self.entity_recall,
+            'confidence_calibration': self.confidence_calibration,
+            'user_satisfaction': self.user_satisfaction,
+            'task_success_rate': self.task_success_rate,
+        }
+
+
+# ============================================================================
+# LEARNING AND ADAPTATION TYPES
+# ============================================================================
+
+@dataclass
+class FeedbackSignal:
+    """User feedback signal for learning"""
+    signal_type: str  # 'positive', 'negative', 'correction'
+    context: PipelineContext
+    correction_data: Optional[Dict[str, Any]] = None
+    timestamp: datetime = field(default_factory=datetime.now)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class LearningUpdate:
+    """Update to be applied to learning systems"""
+    component: str  # 'intent_classifier', 'entity_extractor', etc.
+    update_type: str  # 'pattern', 'weight', 'example'
+    update_data: Dict[str, Any]
+    confidence: float
+    source: str  # 'user_feedback', 'automatic', 'admin'
+    timestamp: datetime = field(default_factory=datetime.now)
+
+
+# ============================================================================
+# ABSTRACT BASE CLASSES FOR COMPONENTS
+# ============================================================================
+
+class IntelligenceComponent(ABC):
+    """Abstract base class for intelligence components"""
+
+    @abstractmethod
+    def process(self, context: PipelineContext) -> ProcessingResult:
+        """Process pipeline context and return result"""
+        pass
+
+    @abstractmethod
+    def get_metrics(self) -> Dict[str, Any]:
+        """Get component metrics"""
+        pass
+
+    @abstractmethod
+    def reset_metrics(self):
+        """Reset component metrics"""
+        pass
+
+
+# ============================================================================
+# UTILITY TYPES
+# ============================================================================
+
+@dataclass
+class ValidationResult:
+    """Result of validation"""
+    valid: bool
+    errors: List[str] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+
+    def add_error(self, error: str):
+        """Add validation error"""
+        self.valid = False
+        self.errors.append(error)
+
+    def add_warning(self, warning: str):
+        """Add validation warning"""
+        self.warnings.append(warning)
+
+
+def create_entity_id(entity: Entity) -> str:
+    """Create unique ID for entity"""
+    return f"{entity.type.value}:{entity.value}"
+
+
+def hash_content(content: str) -> str:
+    """Create hash of content for caching"""
+    return hashlib.sha256(content.encode()).hexdigest()[:16]

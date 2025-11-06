@@ -1,16 +1,21 @@
 """
-Confidence Scoring System
+Confidence Scoring System - Enhanced
 
-Scores confidence in decisions and determines when to:
-- Proceed automatically (high confidence)
-- Confirm with user (medium confidence)
-- Ask clarifying questions (low confidence)
+Probabilistic confidence scoring with Bayesian estimation.
+
+Features:
+- Bayesian confidence estimation
+- Multi-factor probability combination
+- Confidence calibration against historical data
+- Uncertainty quantification
+- Decision theory for proceed/confirm/clarify
 
 Author: AI System
-Version: 2.0
+Version: 3.0 - Major refactoring with probabilistic methods
 """
 
 from typing import List, Dict, Optional, Tuple
+import math
 from .base_types import (
     Confidence, ConfidenceLevel, Intent, Entity,
     ExecutionPlan, Task
@@ -381,3 +386,343 @@ class ConfidenceScorer:
 
         else:
             return ('clarify', f"Low confidence ({confidence.score:.2f}) - asking clarifying questions")
+
+    # ========================================================================
+    # ENHANCED METHODS - V3.0: Bayesian and Probabilistic
+    # ========================================================================
+
+    def score_bayesian(
+        self,
+        message: str,
+        intents: List[Intent],
+        entities: List[Entity],
+        plan: Optional[ExecutionPlan] = None,
+        prior_confidence: float = 0.5
+    ) -> Confidence:
+        """
+        Bayesian confidence scoring
+
+        Uses Bayes' theorem to combine multiple evidence sources:
+        P(correct|evidence) = P(evidence|correct) * P(correct) / P(evidence)
+
+        Args:
+            message: User message
+            intents: Detected intents
+            entities: Extracted entities
+            plan: Execution plan
+            prior_confidence: Prior probability (default 0.5)
+
+        Returns:
+            Confidence with Bayesian estimation
+        """
+        # Start with prior
+        posterior = prior_confidence
+
+        # Evidence 1: Intent clarity
+        intent_likelihood = self._likelihood_from_intent_clarity(message, intents)
+        posterior = self._bayesian_update(posterior, intent_likelihood)
+
+        # Evidence 2: Entity completeness
+        entity_likelihood = self._likelihood_from_entity_completeness(intents, entities)
+        posterior = self._bayesian_update(posterior, entity_likelihood)
+
+        # Evidence 3: Message clarity
+        message_likelihood = self._likelihood_from_message_clarity(message)
+        posterior = self._bayesian_update(posterior, message_likelihood)
+
+        # Evidence 4: Plan quality (if available)
+        if plan:
+            plan_likelihood = self._likelihood_from_plan_quality(plan)
+            posterior = self._bayesian_update(posterior, plan_likelihood)
+
+        # Build confidence object
+        factors = {
+            'intent_likelihood': intent_likelihood,
+            'entity_likelihood': entity_likelihood,
+            'message_likelihood': message_likelihood,
+            'prior': prior_confidence,
+            'posterior': posterior
+        }
+
+        # Identify uncertainties and assumptions
+        uncertainties = self._identify_uncertainties(message, intents, entities, factors)
+        assumptions = self._identify_assumptions(message, intents, entities)
+
+        confidence = Confidence.from_score(posterior, factors)
+        confidence.uncertainties = uncertainties
+        confidence.assumptions = assumptions
+
+        if self.verbose:
+            print(f"[CONFIDENCE] Bayesian score: {posterior:.3f}")
+            print(f"  Prior: {prior_confidence:.3f}")
+            print(f"  Likelihood factors: intent={intent_likelihood:.3f}, entity={entity_likelihood:.3f}, message={message_likelihood:.3f}")
+
+        return confidence
+
+    def _bayesian_update(self, prior: float, likelihood: float) -> float:
+        """
+        Bayesian update: P(H|E) = P(E|H) * P(H) / P(E)
+
+        Simplified version using likelihood ratio.
+
+        Args:
+            prior: Prior probability P(H)
+            likelihood: Likelihood P(E|H)
+
+        Returns:
+            Updated posterior probability
+        """
+        # Avoid division by zero
+        prior = max(0.01, min(0.99, prior))
+        likelihood = max(0.01, min(0.99, likelihood))
+
+        # Compute likelihood ratio
+        # Assuming P(E|¬H) is inversely related to P(E|H)
+        likelihood_ratio = likelihood / (1 - likelihood)
+        prior_odds = prior / (1 - prior)
+
+        # Posterior odds = likelihood ratio * prior odds
+        posterior_odds = likelihood_ratio * prior_odds
+
+        # Convert back to probability
+        posterior = posterior_odds / (1 + posterior_odds)
+
+        return max(0.0, min(1.0, posterior))
+
+    def _likelihood_from_intent_clarity(self, message: str, intents: List[Intent]) -> float:
+        """Compute likelihood from intent clarity"""
+        if not intents:
+            return 0.2
+
+        # Use highest confidence intent
+        max_conf = max(i.confidence for i in intents)
+
+        # Number of high-confidence intents
+        high_conf_count = sum(1 for i in intents if i.confidence > 0.8)
+
+        if high_conf_count == 1:
+            return max_conf
+        elif high_conf_count == 0:
+            return 0.4
+        else:
+            # Multiple intents reduce clarity
+            return max_conf * 0.85
+
+    def _likelihood_from_entity_completeness(
+        self,
+        intents: List[Intent],
+        entities: List[Entity]
+    ) -> float:
+        """Compute likelihood from entity completeness"""
+        if not entities:
+            return 0.3
+
+        # Average entity confidence
+        avg_conf = sum(e.confidence for e in entities) / len(entities)
+
+        # Boost for multiple high-confidence entities
+        high_conf_entities = sum(1 for e in entities if e.confidence > 0.8)
+
+        if high_conf_entities >= 2:
+            return min(avg_conf * 1.1, 1.0)
+        elif high_conf_entities == 1:
+            return avg_conf
+        else:
+            return avg_conf * 0.8
+
+    def _likelihood_from_message_clarity(self, message: str) -> float:
+        """Compute likelihood from message clarity"""
+        words = message.split()
+        word_count = len(words)
+
+        # Optimal length is 5-30 words
+        if 5 <= word_count <= 30:
+            length_score = 0.9
+        elif word_count < 5:
+            length_score = 0.5
+        else:
+            length_score = 0.7
+
+        # Check for ambiguous words
+        ambiguous = ['maybe', 'might', 'could', 'should', 'possibly', 'perhaps', 'probably']
+        ambiguous_count = sum(1 for word in words if word.lower() in ambiguous)
+
+        if ambiguous_count == 0:
+            ambiguity_score = 0.9
+        elif ambiguous_count == 1:
+            ambiguity_score = 0.7
+        else:
+            ambiguity_score = 0.5
+
+        # Combine
+        return (length_score + ambiguity_score) / 2
+
+    def _likelihood_from_plan_quality(self, plan: ExecutionPlan) -> float:
+        """Compute likelihood from plan quality"""
+        if not plan.tasks:
+            return 0.3
+
+        # Check for critical risks
+        critical_risks = sum(1 for r in plan.risks if 'CRITICAL' in r)
+        if critical_risks > 0:
+            return 0.3
+
+        # Check agent assignments
+        unassigned = sum(1 for t in plan.tasks if not t.agent)
+        assignment_ratio = 1.0 - (unassigned / len(plan.tasks))
+
+        # Reasonable task count (1-10 is good)
+        if 1 <= len(plan.tasks) <= 10:
+            task_count_score = 0.9
+        elif len(plan.tasks) > 15:
+            task_count_score = 0.6
+        else:
+            task_count_score = 0.8
+
+        return (assignment_ratio + task_count_score) / 2
+
+    def calibrate_with_history(
+        self,
+        confidence: Confidence,
+        historical_accuracy: Optional[Dict[str, float]] = None
+    ) -> Confidence:
+        """
+        Calibrate confidence against historical accuracy
+
+        Adjusts confidence based on past performance.
+
+        Args:
+            confidence: Current confidence
+            historical_accuracy: Map of confidence ranges to actual accuracy
+
+        Returns:
+            Calibrated confidence
+        """
+        if not historical_accuracy:
+            return confidence
+
+        # Find historical accuracy for this confidence range
+        conf_range = self._get_confidence_range(confidence.score)
+        historical_acc = historical_accuracy.get(conf_range, confidence.score)
+
+        # Calibrate: move towards historical accuracy
+        calibration_factor = 0.3  # Weight of historical data
+        calibrated_score = (
+            confidence.score * (1 - calibration_factor) +
+            historical_acc * calibration_factor
+        )
+
+        # Create calibrated confidence
+        calibrated = Confidence.from_score(calibrated_score, confidence.factors)
+        calibrated.uncertainties = confidence.uncertainties
+        calibrated.assumptions = confidence.assumptions
+
+        if self.verbose:
+            print(f"[CONFIDENCE] Calibrated: {confidence.score:.3f} → {calibrated_score:.3f} (historical: {historical_acc:.3f})")
+
+        return calibrated
+
+    def _get_confidence_range(self, score: float) -> str:
+        """Get confidence range bucket"""
+        if score >= 0.9:
+            return "0.9-1.0"
+        elif score >= 0.8:
+            return "0.8-0.9"
+        elif score >= 0.6:
+            return "0.6-0.8"
+        elif score >= 0.4:
+            return "0.4-0.6"
+        else:
+            return "0.0-0.4"
+
+    def compute_entropy(self, intents: List[Intent]) -> float:
+        """
+        Compute entropy of intent distribution
+
+        High entropy = uncertain (many competing intents)
+        Low entropy = certain (one clear intent)
+
+        Args:
+            intents: List of intents with confidences
+
+        Returns:
+            Entropy value (0 = certain, higher = uncertain)
+        """
+        if not intents:
+            return 0.0
+
+        # Normalize confidences to probabilities
+        total_conf = sum(i.confidence for i in intents)
+        if total_conf == 0:
+            return 0.0
+
+        probs = [i.confidence / total_conf for i in intents]
+
+        # Compute Shannon entropy: H = -Σ p(x) * log2(p(x))
+        entropy = 0.0
+        for p in probs:
+            if p > 0:
+                entropy -= p * math.log2(p)
+
+        if self.verbose:
+            print(f"[CONFIDENCE] Entropy: {entropy:.3f} ({'high uncertainty' if entropy > 1.5 else 'low uncertainty'})")
+
+        return entropy
+
+    def should_ask_for_clarification_bayesian(
+        self,
+        confidence: Confidence,
+        entropy: float,
+        cost_of_error: float = 0.5
+    ) -> bool:
+        """
+        Bayesian decision theory for clarification
+
+        Uses expected utility to decide if asking for clarification is worth it.
+
+        Args:
+            confidence: Confidence score
+            entropy: Entropy of intent distribution
+            cost_of_error: Cost of making wrong decision (0-1)
+
+        Returns:
+            True if should ask for clarification
+        """
+        # Expected utility of proceeding
+        # U(proceed) = P(correct) * benefit - P(wrong) * cost
+        p_correct = confidence.score
+        p_wrong = 1 - p_correct
+
+        benefit_correct = 1.0
+        eu_proceed = p_correct * benefit_correct - p_wrong * cost_of_error
+
+        # Expected utility of clarifying
+        # U(clarify) = P(get_answer) * benefit_correct - small_cost_of_asking
+        p_get_answer = 0.8  # Assume 80% chance user provides good answer
+        cost_of_asking = 0.1
+
+        eu_clarify = p_get_answer * benefit_correct - cost_of_asking
+
+        # Also consider entropy
+        if entropy > 2.0:  # High uncertainty
+            eu_clarify += 0.2  # Boost clarification value
+
+        should_clarify = eu_clarify > eu_proceed
+
+        if self.verbose:
+            print(f"[CONFIDENCE] Decision theory:")
+            print(f"  EU(proceed): {eu_proceed:.3f}")
+            print(f"  EU(clarify): {eu_clarify:.3f}")
+            print(f"  Decision: {'CLARIFY' if should_clarify else 'PROCEED'}")
+
+        return should_clarify
+
+    def get_metrics(self) -> Dict:
+        """Get scorer metrics"""
+        return {
+            'verbose': self.verbose,
+        }
+
+    def reset_metrics(self):
+        """Reset metrics"""
+        pass

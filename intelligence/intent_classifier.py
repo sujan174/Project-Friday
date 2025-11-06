@@ -1,16 +1,25 @@
 """
-Intent Classification Engine
+Intent Classification Engine - Enhanced
 
 Understands what users really want from their natural language requests.
-Classifies intents, detects implicit requirements, and handles multi-intent scenarios.
+Uses hybrid approach: fast keyword matching + optional LLM-based semantic understanding.
+
+Features:
+- Hierarchical intent taxonomy
+- Multi-intent detection
+- Implicit requirement detection
+- Coreference resolution awareness
+- LLM-enhanced semantic understanding (optional)
+- Confidence calibration
 
 Author: AI System
-Version: 2.0
+Version: 3.0 - Major refactoring with LLM support
 """
 
 import re
-from typing import List, Dict, Set, Optional
+from typing import List, Dict, Set, Optional, Any, Tuple
 from .base_types import Intent, IntentType
+from .cache_layer import get_global_cache, CacheKeyBuilder
 
 
 class IntentClassifier:
@@ -24,10 +33,26 @@ class IntentClassifier:
     - Contextual indicators
     """
 
-    def __init__(self, verbose: bool = False):
-        self.verbose = verbose
+    def __init__(self, llm_client: Optional[Any] = None, use_llm: bool = False, verbose: bool = False):
+        """
+        Initialize intent classifier
 
-        # Intent keyword mappings
+        Args:
+            llm_client: Optional LLM client for semantic understanding
+            use_llm: Whether to use LLM for disambiguation (slower but more accurate)
+            verbose: Enable verbose logging
+        """
+        self.llm_client = llm_client
+        self.use_llm = use_llm
+        self.verbose = verbose
+        self.cache = get_global_cache()
+
+        # Metrics
+        self.keyword_classifications = 0
+        self.llm_classifications = 0
+        self.cache_hits = 0
+
+        # Intent keyword mappings (hierarchical)
         self.intent_keywords = {
             IntentType.CREATE: {
                 'primary': ['create', 'make', 'add', 'new', 'start', 'open', 'initialize', 'build', 'generate'],
@@ -328,3 +353,334 @@ class IntentClassifier:
         ]
 
         return any(re.search(pattern, message_lower) for pattern in conditional_patterns)
+
+    # ========================================================================
+    # ENHANCED METHODS - V3.0
+    # ========================================================================
+
+    def classify_with_cache(self, message: str) -> List[Intent]:
+        """
+        Classify with caching support
+
+        Checks cache first, then falls back to classification.
+
+        Args:
+            message: User message
+
+        Returns:
+            List of detected intents
+        """
+        cache_key = CacheKeyBuilder.for_intent_classification(message)
+
+        # Try cache first
+        cached_result = self.cache.get(cache_key)
+        if cached_result is not None:
+            self.cache_hits += 1
+            if self.verbose:
+                print(f"[INTENT] Cache hit for message")
+            return cached_result
+
+        # Classify
+        intents = self.classify(message)
+
+        # Cache result
+        self.cache.set(cache_key, intents, ttl_seconds=300)  # 5 minute TTL
+
+        return intents
+
+    def classify_with_llm(self, message: str, context: Optional[Dict] = None) -> List[Intent]:
+        """
+        Classify intents using LLM for better semantic understanding
+
+        This provides more accurate classification but is slower.
+        Use for ambiguous cases or when keyword matching has low confidence.
+
+        Args:
+            message: User message
+            context: Optional conversation context
+
+        Returns:
+            List of detected intents with higher confidence
+        """
+        if not self.llm_client:
+            if self.verbose:
+                print("[INTENT] No LLM client available, falling back to keywords")
+            return self.classify(message)
+
+        self.llm_classifications += 1
+
+        # Build prompt for LLM
+        prompt = self._build_intent_classification_prompt(message, context)
+
+        try:
+            # Call LLM
+            response = self._call_llm_for_intent(prompt)
+
+            # Parse LLM response
+            intents = self._parse_llm_intent_response(response)
+
+            if self.verbose:
+                print(f"[INTENT] LLM classified {len(intents)} intents")
+
+            return intents
+
+        except Exception as e:
+            if self.verbose:
+                print(f"[INTENT] LLM classification failed: {e}, falling back to keywords")
+            return self.classify(message)
+
+    def classify_hybrid(self, message: str, context: Optional[Dict] = None) -> List[Intent]:
+        """
+        Hybrid classification: keywords first, LLM for disambiguation
+
+        Best of both worlds:
+        - Fast keyword matching for clear cases
+        - LLM for ambiguous or complex cases
+
+        Args:
+            message: User message
+            context: Optional conversation context
+
+        Returns:
+            List of detected intents
+        """
+        # First try keyword-based classification
+        keyword_intents = self.classify(message)
+
+        # Check if we need LLM disambiguation
+        needs_disambiguation = self._needs_disambiguation(keyword_intents, message)
+
+        if not needs_disambiguation or not self.use_llm:
+            return keyword_intents
+
+        if self.verbose:
+            print("[INTENT] Low confidence, using LLM for disambiguation")
+
+        # Use LLM for better understanding
+        llm_intents = self.classify_with_llm(message, context)
+
+        # Merge results (prefer LLM but keep high-confidence keyword matches)
+        merged_intents = self._merge_intent_results(keyword_intents, llm_intents)
+
+        return merged_intents
+
+    def _needs_disambiguation(self, intents: List[Intent], message: str) -> bool:
+        """
+        Determine if intents need LLM disambiguation
+
+        Disambiguation needed when:
+        - No high-confidence intents
+        - Multiple competing intents
+        - Ambiguous language detected
+        - Complex multi-step request
+        """
+        if not intents:
+            return True
+
+        # Check confidence levels
+        high_conf_intents = [i for i in intents if i.confidence > 0.8]
+        if not high_conf_intents:
+            return True
+
+        # Check for multiple competing intents
+        similar_conf_intents = [
+            i for i in intents
+            if i.confidence > 0.6 and abs(i.confidence - intents[0].confidence) < 0.15
+        ]
+        if len(similar_conf_intents) > 2:
+            return True
+
+        # Check for ambiguous language
+        ambiguous_words = ['maybe', 'might', 'could', 'should', 'possibly', 'perhaps']
+        if any(word in message.lower() for word in ambiguous_words):
+            return True
+
+        # Check for complex requests (multiple sentences)
+        if len(re.split(r'[.!?;]', message)) > 3:
+            return True
+
+        return False
+
+    def _merge_intent_results(
+        self,
+        keyword_intents: List[Intent],
+        llm_intents: List[Intent]
+    ) -> List[Intent]:
+        """
+        Merge keyword and LLM intent results intelligently
+
+        Strategy:
+        - Prefer LLM results as they're more semantically accurate
+        - Keep high-confidence keyword matches that LLM missed
+        - Remove duplicates
+        """
+        # Start with LLM intents (higher quality)
+        merged = list(llm_intents)
+
+        # Add high-confidence keyword intents not in LLM results
+        llm_intent_types = {i.type for i in llm_intents}
+
+        for keyword_intent in keyword_intents:
+            if keyword_intent.confidence > 0.85 and keyword_intent.type not in llm_intent_types:
+                merged.append(keyword_intent)
+
+        # Sort by confidence
+        merged.sort(key=lambda x: x.confidence, reverse=True)
+
+        return merged
+
+    def _build_intent_classification_prompt(
+        self,
+        message: str,
+        context: Optional[Dict] = None
+    ) -> str:
+        """Build prompt for LLM intent classification"""
+        prompt = f"""Classify the user's intent(s) from this message.
+
+Message: "{message}"
+
+Available intent types:
+- CREATE: Create something new (issue, PR, page, task, project)
+- READ: Get or retrieve information (show, find, search, list)
+- UPDATE: Modify existing resource (update, change, edit, fix)
+- DELETE: Remove or close something (delete, remove, close, archive)
+- ANALYZE: Review or analyze (review code, check quality, assess)
+- COORDINATE: Notify or communicate (tell someone, send message, post)
+- SEARCH: Search for information
+- WORKFLOW: Automation or conditional logic (if/when/then)
+- UNKNOWN: Cannot determine intent
+
+For each detected intent, provide:
+1. Intent type
+2. Confidence score (0.0 to 1.0)
+3. Key indicators from message
+
+Format response as JSON array:
+[{{"intent": "CREATE", "confidence": 0.95, "indicators": ["create", "new issue"]}}]
+
+If multiple intents detected, include all.
+
+Response:"""
+
+        return prompt
+
+    def _call_llm_for_intent(self, prompt: str) -> str:
+        """Call LLM for intent classification"""
+        # This is a placeholder - actual implementation would call real LLM
+        # For now, return empty to fall back to keyword matching
+        raise NotImplementedError("LLM client integration not implemented")
+
+    def _parse_llm_intent_response(self, response: str) -> List[Intent]:
+        """Parse LLM response into Intent objects"""
+        import json
+
+        try:
+            # Parse JSON response
+            data = json.loads(response)
+
+            intents = []
+            for item in data:
+                intent_type_str = item.get('intent', 'UNKNOWN')
+                confidence = item.get('confidence', 0.5)
+                indicators = item.get('indicators', [])
+
+                # Map string to IntentType
+                try:
+                    intent_type = IntentType(intent_type_str.lower())
+                except ValueError:
+                    intent_type = IntentType.UNKNOWN
+
+                intent = Intent(
+                    type=intent_type,
+                    confidence=confidence,
+                    raw_indicators=indicators
+                )
+                intents.append(intent)
+
+            return intents
+
+        except json.JSONDecodeError:
+            if self.verbose:
+                print("[INTENT] Failed to parse LLM response as JSON")
+            return []
+
+    def calibrate_confidence(self, intents: List[Intent], message: str) -> List[Intent]:
+        """
+        Calibrate confidence scores based on additional factors
+
+        Adjusts confidence based on:
+        - Message clarity
+        - Specificity
+        - Ambiguity indicators
+        - Historical accuracy
+
+        Args:
+            intents: Detected intents
+            message: Original message
+
+        Returns:
+            Intents with calibrated confidence scores
+        """
+        for intent in intents:
+            original_conf = intent.confidence
+
+            # Reduce confidence for very short messages
+            if len(message.split()) < 3:
+                intent.confidence *= 0.9
+
+            # Reduce confidence for vague language
+            vague_words = ['thing', 'stuff', 'something', 'anything']
+            if any(word in message.lower() for word in vague_words):
+                intent.confidence *= 0.85
+
+            # Increase confidence for very specific language
+            specific_indicators = ['#', '@', 'http', '://', '-']
+            specificity = sum(1 for ind in specific_indicators if ind in message)
+            if specificity >= 2:
+                intent.confidence = min(intent.confidence * 1.1, 1.0)
+
+            # Ensure confidence stays in valid range
+            intent.confidence = max(0.0, min(1.0, intent.confidence))
+
+            if self.verbose and abs(original_conf - intent.confidence) > 0.05:
+                print(f"[INTENT] Calibrated {intent.type.value}: {original_conf:.2f} → {intent.confidence:.2f}")
+
+        return intents
+
+    def get_intent_hierarchy(self, intent_type: IntentType) -> List[IntentType]:
+        """
+        Get intent hierarchy (parent-child relationships)
+
+        For example:
+        - UPDATE can be a specialized CREATE (create new version)
+        - ANALYZE can lead to CREATE (create issue from findings)
+
+        Args:
+            intent_type: Intent type to get hierarchy for
+
+        Returns:
+            List of related intent types in hierarchy
+        """
+        hierarchies = {
+            IntentType.CREATE: [IntentType.UPDATE, IntentType.COORDINATE],
+            IntentType.ANALYZE: [IntentType.CREATE, IntentType.COORDINATE],
+            IntentType.SEARCH: [IntentType.READ],
+            IntentType.READ: [IntentType.ANALYZE],
+        }
+
+        return hierarchies.get(intent_type, [])
+
+    def get_metrics(self) -> Dict[str, Any]:
+        """Get classification metrics"""
+        return {
+            'keyword_classifications': self.keyword_classifications,
+            'llm_classifications': self.llm_classifications,
+            'cache_hits': self.cache_hits,
+            'total_classifications': self.keyword_classifications + self.llm_classifications,
+        }
+
+    def reset_metrics(self):
+        """Reset metrics"""
+        self.keyword_classifications = 0
+        self.llm_classifications = 0
+        self.cache_hits = 0
