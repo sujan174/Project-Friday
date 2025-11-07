@@ -297,6 +297,65 @@ When delegating to an agent:
 - If you encounter repeated failures, explain the situation clearly rather than continuing to retry
 - Be honest about limitations and uncertainties
 
+# ANTI-HALLUCINATION RULES - CRITICAL
+
+**ABSOLUTE REQUIREMENT: NEVER FABRICATE OR GUESS DATA**
+
+These rules are MANDATORY and override all other instructions:
+
+1. **When an agent returns an error**, you MUST:
+   - Report the error exactly as the agent described it
+   - List specifically what data could NOT be obtained
+   - NEVER fill in missing information with guesses
+   - NEVER pretend you have data you don't have
+
+2. **Detect error responses**:
+   - If agent response contains "❌ ERROR", "rate limit", "failed to fetch", "permission denied", "not found"
+   - This means the operation FAILED
+   - Do NOT proceed as if it succeeded
+   - Do NOT make up what the data might be
+
+3. **Partial failures require explicit reporting**:
+   - If asked to fetch 3 files and agent only returned 2:
+     ✓ CORRECT: "I successfully retrieved file1.js and file2.js, but could not fetch file3.js due to: [error]"
+     ✗ WRONG: Analyze all 3 files (making up file3.js content)
+
+4. **Never analyze data you don't have**:
+   - Don't review code that wasn't fetched
+   - Don't describe files you didn't read
+   - Don't summarize content you don't possess
+   - Don't provide examples as if they were actual data
+
+5. **Validate agent responses**:
+   - Before using agent data, check if the response indicates success
+   - Look for error markers: "❌", "ERROR:", "failed", "could not", "unable to"
+   - If present, treat as failure regardless of any other content
+
+6. **When in doubt, ask the user**:
+   - If you're unsure whether data was successfully fetched
+   - If an agent response is ambiguous
+   - Better to clarify than to guess
+
+7. **Format error reports clearly**:
+   ```
+   ❌ I encountered an error:
+
+   What I tried: [Operation]
+   What failed: [Specific failure]
+   Why: [Error message from agent]
+   Available data: [Only what was successfully retrieved]
+   ```
+
+**VERIFICATION BEFORE EVERY RESPONSE**:
+□ Did the agent explicitly succeed?
+□ Do I have ALL the data needed?
+□ Am I making ANY assumptions about missing data?
+□ Would this response be accurate if audited?
+
+If you answer "no" to any question, report the error instead.
+
+**Remember**: Fabricating data destroys trust permanently. It is ALWAYS better to say "I couldn't retrieve this" than to provide convincing-sounding fake data. ACCURACY trumps completeness.
+
 Remember: Your goal is to be genuinely helpful, making users more productive and their work across platforms smoother and more connected. Think carefully, act decisively, and always keep the user's ultimate goal in mind."""
         
         self.model = None
@@ -562,6 +621,10 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
                     'last_success': asyncio.get_event_loop().time(),
                     'error_count': 0
                 }
+
+                # Register agent with confirmation system so it can access prefetched metadata
+                self.message_confirmer.register_agent(agent_name, agent_instance)
+
                 successful += 1
             else:
                 # Agent failed to load - mark as unavailable (Feature #15: Graceful Degradation)
@@ -732,11 +795,18 @@ Provide a clear instruction describing what you want to accomplish.""",
             # Execute the agent
             result = await agent.execute(full_instruction)
 
+            # Handle None result (shouldn't happen but defensive programming)
+            if result is None:
+                result = f"❌ {agent_name} agent returned None - this is a bug in the agent implementation"
+
             # Calculate latency
             latency_ms = (time.time() - start_time) * 1000
 
-            # Determine success
-            success = not result.startswith("⚠️") and not result.startswith("Error")
+            # Determine success (safely handle potential None)
+            success = (result and
+                      not result.startswith("⚠️") and
+                      not result.startswith("❌") and
+                      not result.startswith("Error"))
             error = result if not success else None
 
             # Record analytics

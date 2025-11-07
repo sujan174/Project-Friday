@@ -38,7 +38,7 @@ env/
 logs/*.log
 logs/*.json.log
 *.log
-
+logs/*
 # Backups
 *.bak
 *.backup

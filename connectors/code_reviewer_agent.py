@@ -555,24 +555,73 @@ The system detected potential copyrighted content patterns in the large code blo
 
             # Extract review text safely
             try:
-                review_text = llm_safe_extract_response_text(response) if llm_safe_extract_response_text(response) else ""
+                # Use the correct variable name and function
+                review_text = llm_response.text if llm_response and llm_response.text else ""
+
+                # If text is empty or whitespace, check finish_reason
+                if not review_text or not review_text.strip():
+                    finish_reason = llm_response.finish_reason if llm_response else "unknown"
+
+                    if self.verbose:
+                        print(f"[CODE REVIEWER] Empty response. Finish reason: {finish_reason}")
+
+                    # Provide specific error based on finish_reason
+                    if '12' in str(finish_reason):
+                        review_text = """❌ ERROR: Code Review Blocked
+
+What failed: Safety filters blocked the code review
+Why: The code content triggered Google's safety filters (RECITATION block)
+
+This commonly happens with:
+• Authentication code (passwords, tokens, API keys)
+• User credential handling
+• Large code blocks that may contain copyrighted patterns
+
+Suggestions:
+• Review smaller code sections separately
+• Remove sensitive data (passwords, keys) before review
+• Ask for specific aspects: "check security issues" or "review error handling"
+"""
+                    else:
+                        review_text = f"""❌ ERROR: Empty Response
+
+What failed: Code review generated no output
+Why: Finish reason: {finish_reason}
+
+This may occur when:
+• Response was blocked by safety filters
+• Code is too large to process
+• Unexpected API response format
+
+Try:
+• Breaking code into smaller chunks
+• Removing sensitive data
+• Requesting specific analysis aspects
+"""
+
             except Exception as text_error:
                 # If text accessor fails, check finish_reason and provide helpful message
-                finish_reason = llm_response.finish_reason or "unknown"
+                finish_reason = llm_response.finish_reason if llm_response else "unknown"
                 if self.verbose:
-                    print(f"[CODE REVIEWER] Text extraction failed. Finish reason: {finish_reason}")
+                    print(f"[CODE REVIEWER] Text extraction failed. Finish reason: {finish_reason}, Error: {text_error}")
 
                 # Provide helpful error based on finish_reason
-                review_text = f"""⚠️ Review Generation Issue
+                review_text = f"""❌ ERROR: Review Generation Failed
 
-The code review could not be completed. Finish reason: {finish_reason}
+What failed: Could not extract review text from response
+Why: {str(text_error)}
+Finish reason: {finish_reason}
 
 This may occur when:
 • The code is too large (try smaller chunks)
 • The content triggers safety filters
 • The response format is unexpected
 
-Error details: {str(text_error)}"""
+Suggestions:
+• Try reviewing smaller code sections
+• Remove sensitive data (tokens, passwords)
+• Request specific analysis: "check for security issues" or "review performance"
+"""
 
             # Parse issues from review (simple extraction for stats)
             issues = self._extract_issue_counts(review_text)

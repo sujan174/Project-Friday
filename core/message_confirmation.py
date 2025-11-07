@@ -17,6 +17,14 @@ from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass
 from enum import Enum
 
+# Import inquirer for interactive terminal UI
+try:
+    import inquirer
+    from inquirer.themes import GreenPassion
+    INQUIRER_AVAILABLE = True
+except ImportError:
+    INQUIRER_AVAILABLE = False
+
 # Import config for toggleable confirmations
 try:
     from config import Config
@@ -270,6 +278,9 @@ class MandatoryConfirmationEnforcer:
         # Track operations that require confirmation
         self.pending_confirmations: List[Dict[str, Any]] = []
 
+        # Store agent instances for accessing prefetched data
+        self.agent_instances: Dict[str, Any] = {}
+
     def requires_confirmation(self, agent_name: str, instruction: str) -> bool:
         """
         Check if this operation requires confirmation.
@@ -356,7 +367,7 @@ class MandatoryConfirmationEnforcer:
             channel_match = re.search(r'#([\w\-]+)', instruction)
             channel = channel_match.group(1) if channel_match else "unknown"
 
-            # Extract message content (everything after keywords)
+            # Extract message content (quoted strings first)
             message_patterns = [
                 r'message[:\s]+"([^"]+)"',
                 r'message[:\s]+\'([^\']+)\'',
@@ -370,6 +381,24 @@ class MandatoryConfirmationEnforcer:
                 if match:
                     message = match.group(1)
                     break
+
+            if not message:
+                # Try to extract unquoted message: "send MESSAGE to/on CHANNEL"
+                # Match: send/post [MESSAGE] to/on [CHANNEL]
+                unquoted_patterns = [
+                    r'(?:send|post)\s+(.+?)\s+(?:to|on)\s+(?:#?[\w\-\s]+channel|#[\w\-]+|slack)',
+                    r'(?:send|post)\s+(.+?)\s+(?:to|on)',
+                ]
+
+                for pattern in unquoted_patterns:
+                    match = re.search(pattern, instruction, re.IGNORECASE)
+                    if match:
+                        message = match.group(1).strip()
+                        # Clean up common artifacts
+                        message = re.sub(r'\s+to\s+slack\s*$', '', message, flags=re.IGNORECASE)
+                        message = re.sub(r'\s+on\s+slack\s*$', '', message, flags=re.IGNORECASE)
+                        if message:
+                            break
 
             if not message:
                 # Fallback: use instruction as message
@@ -395,6 +424,179 @@ class MandatoryConfirmationEnforcer:
 
         return None
 
+    def register_agent(self, agent_name: str, agent_instance: Any):
+        """Register an agent instance for accessing prefetched metadata"""
+        self.agent_instances[agent_name] = agent_instance
+
+    def _channel_exists(self, channel_name: str, agent_instance: Any) -> bool:
+        """Check if a channel exists in prefetched data"""
+        try:
+            if not agent_instance or not hasattr(agent_instance, 'metadata_cache'):
+                return True  # Can't verify, assume it exists
+
+            metadata = agent_instance.metadata_cache
+            if not isinstance(metadata, dict):
+                return True
+
+            channels = metadata.get('channels', {})
+            if not channels:
+                return True
+
+            search_name = channel_name.lstrip('#').lower()
+
+            # channels is a dict keyed by channel ID, iterate over values
+            for ch in channels.values():
+                if isinstance(ch, dict):
+                    ch_name = ch.get('name', '').lower()
+                    if ch_name == search_name:
+                        return True
+
+            return False
+
+        except Exception:
+            return True  # On error, assume exists
+
+    def _get_available_channels(self, agent_instance: Any) -> List[str]:
+        """Get list of available channel names"""
+        try:
+            if not agent_instance or not hasattr(agent_instance, 'metadata_cache'):
+                return []
+
+            metadata = agent_instance.metadata_cache
+            if not isinstance(metadata, dict):
+                return []
+
+            channels = metadata.get('channels', {})
+            if not channels:
+                return []
+
+            names = []
+            # channels is a dict keyed by channel ID, iterate over values
+            for ch in channels.values():
+                if isinstance(ch, dict):
+                    ch_name = ch.get('name', '')
+                    if ch_name:
+                        names.append(f"#{ch_name}")
+
+            return sorted(names)
+
+        except Exception:
+            return []
+
+    def _format_channel_not_found(self, channel_name: str, available_channels: List[str]) -> str:
+        """Format message for channel not found"""
+        msg = f"\n{'='*70}\n"
+        msg += f"⚠️  Channel '#{channel_name}' not found\n"
+        msg += f"{'='*70}\n\n"
+        msg += f"Available channels:\n"
+
+        # Show channels in columns
+        for i, ch in enumerate(available_channels[:20], 1):  # Show max 20
+            msg += f"  {ch}"
+            if i % 3 == 0:
+                msg += "\n"
+            else:
+                msg += "  "
+
+        if len(available_channels) > 20:
+            msg += f"\n  ... and {len(available_channels) - 20} more"
+
+        msg += f"\n\n"
+        return msg
+
+    def _calculate_channel_similarity(self, search_name: str, channel_name: str) -> float:
+        """
+        Calculate similarity score between search term and channel name.
+        Returns score from 0.0 (no match) to 1.0 (perfect match).
+        """
+        search_lower = search_name.lower().replace(' ', '').replace('-', '').replace('_', '')
+        channel_lower = channel_name.lower().replace(' ', '').replace('-', '').replace('_', '')
+
+        # Exact match after normalization
+        if search_lower == channel_lower:
+            return 1.0
+
+        # Contains match
+        if search_lower in channel_lower:
+            return 0.9
+
+        if channel_lower in search_lower:
+            return 0.85
+
+        # Check if all words in search appear in channel
+        search_words = search_name.lower().replace('-', ' ').replace('_', ' ').split()
+        channel_lower_full = channel_name.lower()
+
+        matches = sum(1 for word in search_words if word in channel_lower_full)
+        if matches > 0 and len(search_words) > 0:
+            word_match_score = (matches / len(search_words)) * 0.8
+            return word_match_score
+
+        # Character-level similarity (simple Levenshtein-like)
+        common_chars = sum(1 for c in search_lower if c in channel_lower)
+        if len(search_lower) > 0:
+            char_similarity = (common_chars / len(search_lower)) * 0.5
+            return char_similarity
+
+        return 0.0
+
+    def _resolve_slack_channel(self, channel_name: str, agent_instance: Any) -> str:
+        """Resolve fuzzy channel name to actual channel using intelligent matching"""
+        try:
+            if not agent_instance or not hasattr(agent_instance, 'metadata_cache'):
+                return channel_name
+
+            metadata = agent_instance.metadata_cache
+            if not isinstance(metadata, dict):
+                return channel_name
+
+            channels = metadata.get('channels', {})
+            if not channels or not isinstance(channels, dict):
+                return channel_name
+
+            # Remove # if present
+            search_name = channel_name.lstrip('#')
+
+            # Exact match first (case-insensitive)
+            for ch in channels.values():
+                if not isinstance(ch, dict):
+                    continue
+                ch_name = ch.get('name', '')
+                if ch_name and ch_name.lower() == search_name.lower():
+                    return ch_name
+
+            # Find best fuzzy match using similarity scoring
+            best_match = None
+            best_score = 0.7  # Minimum threshold for auto-matching
+
+            for ch in channels.values():
+                if not isinstance(ch, dict):
+                    continue
+
+                ch_name = ch.get('name', '')
+                if not ch_name:
+                    continue
+
+                score = self._calculate_channel_similarity(search_name, ch_name)
+
+                if score > best_score:
+                    best_score = score
+                    best_match = ch_name
+
+            if best_match:
+                if self.verbose:
+                    print(f"[CONFIRM] Fuzzy matched '{channel_name}' → '{best_match}' (score: {best_score:.2f})")
+                return best_match
+
+            # No match found, return original
+            return channel_name
+
+        except Exception as e:
+            # If any error during resolution, just return original
+            if self.verbose:
+                print(f"[CONFIRM] Channel resolution error: {e}")
+            return channel_name
+
     def confirm_before_execution(
         self,
         agent_name: str,
@@ -419,6 +621,90 @@ class MandatoryConfirmationEnforcer:
             return self._generic_confirmation(agent_name, instruction)
 
         destination, content, metadata = extracted
+
+        # Resolve and VALIDATE channel for Slack BEFORE showing confirmation
+        if agent_lower == 'slack':
+            agent_instance = self.agent_instances.get(agent_name)
+            if agent_instance:
+                # Try to resolve the channel
+                resolved_channel = self._resolve_slack_channel(destination, agent_instance)
+
+                # If no match found, show available channels and let user pick
+                if resolved_channel == destination and not self._channel_exists(destination, agent_instance):
+                    # Channel doesn't exist - show available options
+                    available = self._get_available_channels(agent_instance)
+
+                    if available:
+                        # Calculate similarity scores for all channels and show top matches
+                        channel_scores = []
+                        for ch in available:
+                            ch_clean = ch.lstrip('#')
+                            score = self._calculate_channel_similarity(destination, ch_clean)
+                            channel_scores.append((ch, score))
+
+                        # Sort by similarity score (best matches first)
+                        channel_scores.sort(key=lambda x: x[1], reverse=True)
+                        sorted_channels = [ch for ch, score in channel_scores]
+
+                        # Use interactive selection if inquirer is available
+                        if INQUIRER_AVAILABLE:
+                            try:
+                                print(f"\n⚠️  Channel '#{destination}' not found.")
+                                print(f"📋 Please select the correct channel:\n")
+
+                                # Add cancel option
+                                choices = sorted_channels + ['❌ Cancel']
+
+                                questions = [
+                                    inquirer.List('channel',
+                                                message="Select a channel",
+                                                choices=choices,
+                                                carousel=True)
+                                ]
+
+                                answers = inquirer.prompt(questions, theme=GreenPassion())
+
+                                if not answers or answers['channel'] == '❌ Cancel':
+                                    print("❌ Operation cancelled")
+                                    return False, None
+
+                                resolved_channel = answers['channel'].lstrip('#')
+
+                            except Exception as e:
+                                # Fallback to text input if inquirer fails
+                                if self.verbose:
+                                    print(f"[CONFIRM] Interactive prompt failed: {e}")
+                                print(f"\n{self._format_channel_not_found(destination, sorted_channels[:10])}")
+                                choice = input("Enter channel name (or 'c' to cancel): ").strip()
+
+                                if choice.lower() == 'c':
+                                    return False, None
+
+                                resolved_channel = choice.lstrip('#')
+
+                                if not self._channel_exists(resolved_channel, agent_instance):
+                                    print(f"⚠️  Channel '{resolved_channel}' not found. Operation cancelled.")
+                                    return False, None
+                        else:
+                            # Fallback to text input if inquirer not available
+                            print(f"\n{self._format_channel_not_found(destination, sorted_channels[:10])}")
+                            choice = input("Enter channel name (or 'c' to cancel): ").strip()
+
+                            if choice.lower() == 'c':
+                                return False, None
+
+                            resolved_channel = choice.lstrip('#')
+
+                            if not self._channel_exists(resolved_channel, agent_instance):
+                                print(f"⚠️  Channel '{resolved_channel}' not found. Operation cancelled.")
+                                return False, None
+
+                # Always rebuild instruction with resolved channel to ensure agent gets correct destination
+                destination = resolved_channel
+                # Build a clean instruction for the agent with the correct channel
+                instruction = f"send '{content}' to #{resolved_channel}"
+                if self.verbose:
+                    print(f"[CONFIRM] Rebuilt instruction for agent: {instruction}")
 
         # Show confirmation based on agent type
         if agent_lower == 'slack':
