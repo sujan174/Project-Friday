@@ -31,16 +31,21 @@ from intelligence import (
 # Import terminal UI
 from ui.terminal_ui import TerminalUI, Colors as C_NEW, Icons
 
-# Import confirmation system (NEW)
-from orchestration import ConfirmationQueue, ConfirmationBatch, Action, ActionEnricher
-from orchestration.action_parser import ActionParser
-from ui.confirmation_ui import ConfirmationUI
+# Old confirmation system removed - using MandatoryConfirmationEnforcer instead
 
 # Import production utilities
 from config import Config
 from core.logger import get_logger
 from core.input_validator import InputValidator
 from core.error_handler import ErrorClassifier, format_error_for_user, DuplicateOperationDetector
+
+# Import new enhancement systems
+from core.retry_manager import RetryManager
+from core.undo_manager import UndoManager, UndoableOperationType
+from core.user_preferences import UserPreferenceManager
+from core.analytics import AnalyticsCollector
+from core.error_messaging import ErrorMessageEnhancer
+from core.message_confirmation import MandatoryConfirmationEnforcer
 
 logger = get_logger(__name__)
 load_dotenv()
@@ -118,6 +123,7 @@ class OrchestratorAgent:
         self.shared_context = SharedContext(self.session_id)
 
         # Feature #20: Confirmation preferences (loaded from Config)
+        # NOTE: Confirmations now handled by MandatoryConfirmationEnforcer for Slack/Notion
         self.confirmation_prefs = {
             'always_confirm_deletes': Config.CONFIRM_DELETES,
             'always_confirm_bulk': Config.CONFIRM_BULK_OPERATIONS,
@@ -127,9 +133,6 @@ class OrchestratorAgent:
             'confirm_slack_messages': Config.CONFIRM_SLACK_MESSAGES,  # Always confirm Slack messages (send/notify actions)
             'confirm_jira_operations': Config.CONFIRM_JIRA_OPERATIONS,  # Always confirm Jira operations (create/update/delete)
         }
-
-        # Track confirmations to avoid asking multiple times for same operation
-        self.confirmed_operations: set = set()
 
         # Feature #8: Intelligent Retry tracking
         self.retry_tracker: Dict[str, Dict[str, Any]] = {}  # Track retry attempts per operation
@@ -160,11 +163,70 @@ class OrchestratorAgent:
             verbose=self.verbose
         )
 
+        # ===================================================================
+        # NEW ENHANCEMENT SYSTEMS (Retry, Undo, Preferences, Analytics)
+        # ===================================================================
+
+        # 1. Retry Manager - Smart exponential backoff
+        self.retry_manager = RetryManager(
+            max_retries=self.max_retry_attempts,
+            base_delay=1.0,
+            max_delay=30.0,
+            backoff_factor=2.0,
+            jitter=True,
+            verbose=self.verbose
+        )
+
+        # 2. Undo Manager - Undo destructive operations
+        self.undo_manager = UndoManager(
+            max_undo_history=20,
+            default_ttl_seconds=3600,  # 1 hour
+            verbose=self.verbose
+        )
+
+        # 3. User Preferences - Learn from user behavior
+        user_id = os.environ.get("USER_ID", "default")
+        self.user_prefs = UserPreferenceManager(
+            user_id=user_id,
+            min_confidence_threshold=0.7,
+            verbose=self.verbose
+        )
+
+        # 4. Analytics - Performance monitoring
+        self.analytics = AnalyticsCollector(
+            session_id=self.session_id,
+            max_latency_samples=1000,
+            verbose=self.verbose
+        )
+
+        # 5. Error Message Enhancer - Better error messages
+        self.error_enhancer = ErrorMessageEnhancer(verbose=self.verbose)
+
+        # 6. Mandatory Confirmation - Human-in-the-loop for Slack/Notion
+        self.message_confirmer = MandatoryConfirmationEnforcer(verbose=self.verbose)
+
+        # Load user preferences from file if exists
+        self.prefs_file = Path(f"data/preferences/{user_id}.json")
+        self.prefs_file.parent.mkdir(parents=True, exist_ok=True)
+        if self.prefs_file.exists():
+            try:
+                self.user_prefs.load_from_file(str(self.prefs_file))
+                if self.verbose:
+                    print(f"{C.CYAN}📊 Loaded user preferences from {self.prefs_file}{C.ENDC}")
+            except Exception as e:
+                logger.warning(f"Failed to load preferences: {e}")
+
+        # Register undo handlers
+        self._register_undo_handlers()
+
+        # ===================================================================
+
         if self.verbose:
             print(f"{C.CYAN}🧠 Intelligence enabled: Session {self.session_id[:8]}...{C.ENDC}")
             print(f"{C.CYAN}📊 Advanced Intelligence: Intent, Entity, Task, Confidence, Context{C.ENDC}")
             print(f"{C.CYAN}📝 Logging to: {self.session_logger.get_log_path()}{C.ENDC}")
-        
+            print(f"{C.CYAN}🔄 Retry, 📊 Analytics, 🧠 Preferences, ↩️  Undo - All enabled{C.ENDC}")
+
         self.system_prompt = """You are an AI orchestration system that coordinates specialized agents to help users accomplish complex tasks across multiple platforms and tools.
 
 Your core purpose is to be a highly capable, reliable workspace assistant that understands user intent, breaks down complex requests into actionable steps, and seamlessly coordinates specialized agents to deliver results.
@@ -249,6 +311,84 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
             "object": protos.Type.OBJECT,
             "array": protos.Type.ARRAY,
         }
+
+    # =========================================================================
+    # UNDO HANDLER REGISTRATION
+    # =========================================================================
+
+    def _register_undo_handlers(self):
+        """Register undo handlers for all agent types"""
+
+        # Jira undo handlers
+        async def undo_jira_delete(undo_params: Dict) -> str:
+            """Undo Jira issue deletion (note: actual deletion is usually permanent)"""
+            issue_key = undo_params.get('issue_key')
+            return f"⚠️ Cannot restore deleted issue {issue_key} - deletion is permanent. Consider recreating it manually."
+
+        async def undo_jira_transition(undo_params: Dict) -> str:
+            """Undo Jira issue transition by reverting to previous status"""
+            issue_key = undo_params.get('issue_key')
+            previous_status = undo_params.get('previous_status')
+            agent = self.sub_agents.get('jira')
+
+            if agent:
+                instruction = f"Transition {issue_key} back to '{previous_status}' status"
+                result = await agent.execute(instruction)
+                return f"✓ Reverted {issue_key} to {previous_status}: {result}"
+            return f"❌ Jira agent not available"
+
+        # Slack undo handlers
+        async def undo_slack_delete_message(undo_params: Dict) -> str:
+            """Undo Slack message deletion (note: usually permanent)"""
+            channel = undo_params.get('channel')
+            message_text = undo_params.get('message_text', '')
+            return f"⚠️ Cannot restore deleted message in {channel} - deletion is permanent. Original message: {message_text[:100]}"
+
+        # GitHub undo handlers
+        async def undo_github_close_pr(undo_params: Dict) -> str:
+            """Undo GitHub PR closure by reopening"""
+            pr_number = undo_params.get('pr_number')
+            repo = undo_params.get('repo')
+            agent = self.sub_agents.get('github')
+
+            if agent:
+                instruction = f"Reopen pull request #{pr_number} in {repo}"
+                result = await agent.execute(instruction)
+                return f"✓ Reopened PR #{pr_number}: {result}"
+            return f"❌ GitHub agent not available"
+
+        async def undo_github_close_issue(undo_params: Dict) -> str:
+            """Undo GitHub issue closure by reopening"""
+            issue_number = undo_params.get('issue_number')
+            repo = undo_params.get('repo')
+            agent = self.sub_agents.get('github')
+
+            if agent:
+                instruction = f"Reopen issue #{issue_number} in {repo}"
+                result = await agent.execute(instruction)
+                return f"✓ Reopened issue #{issue_number}: {result}"
+            return f"❌ GitHub agent not available"
+
+        # Notion undo handlers
+        async def undo_notion_delete_page(undo_params: Dict) -> str:
+            """Undo Notion page deletion (note: usually permanent)"""
+            page_title = undo_params.get('page_title', 'Unknown')
+            return f"⚠️ Cannot restore deleted Notion page '{page_title}' - deletion is permanent."
+
+        # Register all handlers
+        self.undo_manager.register_undo_handler(UndoableOperationType.JIRA_DELETE_ISSUE, undo_jira_delete)
+        self.undo_manager.register_undo_handler(UndoableOperationType.JIRA_TRANSITION, undo_jira_transition)
+        self.undo_manager.register_undo_handler(UndoableOperationType.SLACK_DELETE_MESSAGE, undo_slack_delete_message)
+        self.undo_manager.register_undo_handler(UndoableOperationType.GITHUB_CLOSE_PR, undo_github_close_pr)
+        self.undo_manager.register_undo_handler(UndoableOperationType.GITHUB_CLOSE_ISSUE, undo_github_close_issue)
+        self.undo_manager.register_undo_handler(UndoableOperationType.NOTION_DELETE_PAGE, undo_notion_delete_page)
+
+        if self.verbose:
+            print(f"{C.CYAN}↩️  Registered {len(self.undo_manager.undo_handlers)} undo handlers{C.ENDC}")
+
+    # =========================================================================
+    # HELPER METHODS
+    # =========================================================================
 
     async def _spinner(self, task: asyncio.Task, message: str):
         """Display an animated spinner while a task is running."""
@@ -476,11 +616,16 @@ Provide a clear instruction describing what you want to accomplish.""",
         return tools
     
     async def call_sub_agent(self, agent_name: str, instruction: str, context: Any = None) -> str:
-        """Execute a task using a specialized sub-agent with health checking"""
+        """
+        Execute a task using a specialized sub-agent with:
+        - Retry management (smart exponential backoff)
+        - Analytics tracking (performance metrics)
+        - Health checking
+        """
         if agent_name not in self.sub_agents:
             return f"Error: Agent '{agent_name}' not found"
 
-        # Feature #15: Graceful Degradation - Check agent health before calling
+        # Check agent health before calling
         if agent_name in self.agent_health:
             health = self.agent_health[agent_name]
             if health['status'] == 'unavailable':
@@ -488,16 +633,79 @@ Provide a clear instruction describing what you want to accomplish.""",
                 print(f"{C.YELLOW}{error_msg}{C.ENDC}")
                 return error_msg
 
+        # ===== MANDATORY CONFIRMATION FOR SLACK & NOTION =====
+        # Check if this operation requires human approval
+        if self.message_confirmer.requires_confirmation(agent_name, instruction):
+            if self.verbose:
+                print(f"\n{C.CYAN}📋 This operation requires human confirmation{C.ENDC}")
+
+            should_execute, modified_instruction = self.message_confirmer.confirm_before_execution(
+                agent_name=agent_name,
+                instruction=instruction
+            )
+
+            if not should_execute:
+                # User rejected or wants AI modification
+                if modified_instruction and modified_instruction.startswith("[AI_MODIFICATION_REQUESTED]"):
+                    # User wants AI to modify the message/content
+                    modification_request = modified_instruction.replace("[AI_MODIFICATION_REQUESTED] ", "")
+
+                    # Return a special response that tells the orchestrator to regenerate
+                    # The main intelligence layer will see this and ask Claude to revise
+                    return f"🔄 User requested modification: {modification_request}\n\nPlease revise the {agent_name} operation based on this feedback and try again."
+                else:
+                    # User rejected - don't execute
+                    return "❌ Operation cancelled by user"
+            else:
+                # User approved (possibly with manual edits)
+                # Use the modified instruction if provided
+                if modified_instruction:
+                    instruction = modified_instruction
+                    print(f"{C.GREEN}✅ Approved! Executing...{C.ENDC}")
+
+        # Create operation key for retry/analytics tracking
+        operation_key = f"{agent_name}_{hashlib.md5(instruction[:100].encode()).hexdigest()[:8]}"
+
+        # Define the operation to execute
+        async def execute_operation():
+            return await self._execute_agent_direct(agent_name, instruction, context)
+
+        # Define progress callback for retry manager
+        def progress_callback(message: str, attempt: int, max_attempts: int):
+            if attempt > 1:
+                print(f"{C.YELLOW}🔄 {message}{C.ENDC}")
+
+        # Execute with retry management
+        try:
+            result = await self.retry_manager.execute_with_retry(
+                operation_key=operation_key,
+                agent_name=agent_name,
+                instruction=instruction,
+                operation=execute_operation,
+                progress_callback=progress_callback
+            )
+            return result
+
+        except Exception as e:
+            # Final failure after all retries
+            error_msg = f"Error executing {agent_name} agent: {str(e)}"
+            print(f"{C.RED}✗ {error_msg}{C.ENDC}")
+            if self.verbose:
+                traceback.print_exc()
+            return error_msg
+
+    async def _execute_agent_direct(self, agent_name: str, instruction: str, context: Any = None) -> str:
+        """Direct agent execution with analytics tracking (called by retry manager)"""
+
         if self.verbose:
             print(f"\n{C.MAGENTA}{'─'*60}{C.ENDC}")
             print(f"{C.MAGENTA}🤖 Delegating to {C.BOLD}{agent_name}{C.ENDC}{C.MAGENTA} agent{C.ENDC}")
             print(f"{C.MAGENTA}{'─'*60}{C.ENDC}")
             print(f"{C.CYAN}Instruction: {instruction}{C.ENDC}")
 
-        # --- START FIX ---
+        # Prepare context
         context_str = ""
         if context:
-            # If context is a dict/object, JSON-serialize it. Otherwise, cast to string.
             if isinstance(context, (dict, list)):
                 context_str = json.dumps(context, indent=2)
             else:
@@ -505,12 +713,15 @@ Provide a clear instruction describing what you want to accomplish.""",
 
             if self.verbose:
                 print(f"{C.CYAN}Context: {context_str[:200]}...{C.ENDC}")
-        # --- END FIX ---
+
+        # Start timing for analytics
+        import time
+        start_time = time.time()
 
         try:
             agent = self.sub_agents[agent_name]
 
-            # Build the full prompt with context_str
+            # Build full instruction with context
             full_instruction = instruction
             if context_str:
                 full_instruction = f"Context from previous steps:\n{context_str}\n\nTask: {instruction}"
@@ -519,44 +730,89 @@ Provide a clear instruction describing what you want to accomplish.""",
             self.session_logger.log_message_to_agent(agent_name, full_instruction)
 
             # Execute the agent
-            start_time = asyncio.get_event_loop().time()
             result = await agent.execute(full_instruction)
-            duration = asyncio.get_event_loop().time() - start_time
 
-            # Log response from agent
+            # Calculate latency
+            latency_ms = (time.time() - start_time) * 1000
+
+            # Determine success
             success = not result.startswith("⚠️") and not result.startswith("Error")
             error = result if not success else None
+
+            # Record analytics
+            self.analytics.record_agent_call(
+                agent_name=agent_name,
+                success=success,
+                latency_ms=latency_ms,
+                error_message=error
+            )
+
+            # Log response from agent
             self.session_logger.log_message_from_agent(agent_name, result, success, error)
 
             # Update health status on success
-            if agent_name in self.agent_health:
+            if success and agent_name in self.agent_health:
                 self.agent_health[agent_name]['status'] = 'healthy'
                 self.agent_health[agent_name]['last_success'] = asyncio.get_event_loop().time()
                 self.agent_health[agent_name]['error_count'] = 0
 
             if self.verbose:
-                print(f"{C.GREEN}✓ {agent_name} completed successfully{C.ENDC}")
+                status = "✓" if success else "✗"
+                print(f"{C.GREEN if success else C.RED}{status} {agent_name} completed ({latency_ms:.0f}ms){C.ENDC}")
                 print(f"{C.MAGENTA}{'─'*60}{C.ENDC}\n")
+
+            # If failed, raise exception for retry manager
+            if not success:
+                # Enhance error message before raising
+                enhanced = self.error_enhancer.enhance_error(
+                    agent_name=agent_name,
+                    error=RuntimeError(result),
+                    instruction=instruction,
+                    context=context
+                )
+                enhanced_msg = enhanced.format()
+
+                if self.verbose:
+                    print(f"{C.YELLOW}{enhanced_msg}{C.ENDC}")
+
+                raise RuntimeError(enhanced_msg)
 
             return result
 
         except Exception as e:
+            # Calculate latency even on failure
+            latency_ms = (time.time() - start_time) * 1000
+
+            # Enhance error message
+            enhanced = self.error_enhancer.enhance_error(
+                agent_name=agent_name,
+                error=e,
+                instruction=instruction,
+                context=context
+            )
+            enhanced_msg = enhanced.format()
+
+            # Record analytics
+            self.analytics.record_agent_call(
+                agent_name=agent_name,
+                success=False,
+                latency_ms=latency_ms,
+                error_message=enhanced_msg
+            )
+
             # Update health status on failure
             if agent_name in self.agent_health:
                 self.agent_health[agent_name]['error_count'] = self.agent_health[agent_name].get('error_count', 0) + 1
                 self.agent_health[agent_name]['last_failure'] = asyncio.get_event_loop().time()
-                self.agent_health[agent_name]['error_message'] = str(e)
+                self.agent_health[agent_name]['error_message'] = enhanced_msg
 
                 # Mark as degraded if error count exceeds threshold
                 if self.agent_health[agent_name]['error_count'] >= 3:
                     self.agent_health[agent_name]['status'] = 'degraded'
                     print(f"{C.YELLOW}⚠️ {agent_name} agent marked as degraded after 3 failures{C.ENDC}")
 
-            error_msg = f"Error executing {agent_name} agent: {str(e)}"
-            print(f"{C.RED}✗ {error_msg}{C.ENDC}")
-            if self.verbose:
-                traceback.print_exc()
-            return error_msg
+            # Re-raise enhanced error for retry manager
+            raise RuntimeError(enhanced_msg)
 
     def _process_with_intelligence(self, user_message: str) -> Dict:
         """
@@ -623,6 +879,21 @@ Provide a clear instruction describing what you want to accomplish.""",
     async def process_message(self, user_message: str) -> str:
         """Process a user message with orchestration"""
 
+        # ===================================================================
+        # USER PREFERENCES & ANALYTICS TRACKING
+        # ===================================================================
+
+        # Record user message for analytics
+        self.analytics.record_user_message()
+
+        # Record interaction time for working hours learning
+        self.user_prefs.record_interaction_time()
+
+        # Learn communication style from user message
+        self.user_prefs.record_interaction_style(user_message)
+
+        # ===================================================================
+
         # Initialize on first message
         if not self.chat:
             # Run the discovery task with a spinner
@@ -649,20 +920,6 @@ Provide a clear instruction describing what you want to accomplish.""",
 
         # Reset operation counter for this request
         self.operation_count = 0
-
-        # Reset confirmed operations for this request
-        # (confirmations should only apply within a single user message)
-        self.confirmed_operations.clear()
-
-        # Initialize confirmation system for this request (NEW)
-        confirmation_queue = ConfirmationQueue(
-            batch_timeout_ms=1000,  # 1 second timeout
-            max_batch_size=10,      # Max 10 actions per batch
-            verbose=self.verbose
-        )
-        action_parser = ActionParser(verbose=self.verbose)
-        action_enricher = ActionEnricher(verbose=self.verbose)
-        confirmation_ui = ConfirmationUI(verbose=self.verbose)
 
         # Process with intelligence
         intelligence = self._process_with_intelligence(user_message)
@@ -749,160 +1006,8 @@ Provide a clear instruction describing what you want to accomplish.""",
                 }
                 continue
 
-            # Feature #20: Check if operation needs confirmation
-            risk_info = self._detect_risky_operation(agent_name, instruction)
-
-            # NEW: Use confirmation queue for risky operations
-            if risk_info.get('needs_confirmation'):
-                # Parse instruction into structured Action
-                agent = self.sub_agents.get(agent_name)
-                action = await action_parser.parse_instruction(
-                    agent_name=agent_name,
-                    instruction=instruction,
-                    agent=agent,
-                    context=context
-                )
-
-                # Enrich action with context from agent (with timeout)
-                try:
-                    await asyncio.wait_for(
-                        action_enricher.enrich_action(action, agent),
-                        timeout=Config.ENRICHMENT_TIMEOUT
-                    )
-                except asyncio.TimeoutError:
-                    logger.warning(f"Enrichment timeout for {agent_name}, proceeding with basic details")
-
-                # Queue the action (thread-safe)
-                await confirmation_queue.queue_action(action)
-
-                if self.verbose:
-                    print(f"{C.CYAN}[QUEUE] Action queued for confirmation{C.ENDC}")
-
-                # IMPORTANT: Always present the batch immediately for single actions
-                # to avoid infinite loops where LLM keeps retrying
-                # For true batching, we'd need a smarter queueing strategy
-                batch = await confirmation_queue.prepare_batch()
-                batch.mark_presented()
-
-                # Present to user
-                confirmation_ui.present_batch(batch.actions)
-
-                # Collect decisions
-                decisions = confirmation_ui.collect_decisions(batch.actions)
-                batch.mark_decisions_received()
-
-                # Process all actions in this batch
-                for action_in_batch in batch.actions:
-                        if action_in_batch.id in decisions['confirmed']:
-                            # Apply user edits if any
-                            final_instruction = action_in_batch.instruction
-                            if action_in_batch.id in decisions['edited']:
-                                edits = decisions['edited'][action_in_batch.id]
-                                final_instruction = await agent.apply_parameter_edits(
-                                    action_in_batch.instruction, edits
-                                )
-                                if self.verbose:
-                                    print(f"{C.GREEN}[CONFIRM] Applied edits to instruction{C.ENDC}")
-
-                            # Mark as confirmed and execute
-                            action_in_batch.mark_confirmed()
-                            action_in_batch.mark_executing()
-
-                            # Execute
-                            result = await self.call_sub_agent(
-                                action_in_batch.agent_name,
-                                final_instruction,
-                                action_in_batch.context
-                            )
-
-                            if result.startswith("Error") or result.startswith("⚠️"):
-                                action_in_batch.mark_failed(result)
-                            else:
-                                action_in_batch.mark_succeeded(result)
-
-                            # Send result back to LLM
-                            func_result = {'name': f"use_{action_in_batch.agent_name}_agent", 'result': result}
-                            response_task = asyncio.create_task(
-                                self.chat.send_message_with_functions("", func_result)
-                            )
-                            await self._spinner(response_task, "Processing result")
-                            llm_response = response_task.result()
-                            response = llm_response.metadata.get('response_object') if llm_response.metadata else None
-
-                        elif action_in_batch.id in decisions['rejected']:
-                            # User rejected
-                            reason = decisions['rejected'][action_in_batch.id]
-                            action_in_batch.mark_rejected(reason)
-                            result = f"⚠️ Operation cancelled by user: {reason}"
-
-                            func_result = {'name': f"use_{action_in_batch.agent_name}_agent", 'result': result}
-                            response_task = asyncio.create_task(
-                                self.chat.send_message_with_functions("", func_result)
-                            )
-                            await self._spinner(response_task, "Processing result")
-                            llm_response = response_task.result()
-                            response = llm_response.metadata.get('response_object') if llm_response.metadata else None
-
-                confirmation_queue.archive_batch()
-
-                # Continue to next iteration after processing the batch
-                iteration += 1
-                continue
-
-            # OLD: Original confirmation code (keeping for backwards compatibility)
-            if risk_info.get('needs_confirmation') and False:  # Disabled - using new system
-                # Create operation signature for tracking
-                operation_sig = self._create_operation_signature(agent_name, instruction, risk_info['risk_type'])
-
-                # Check if we already confirmed this operation
-                if operation_sig in self.confirmed_operations:
-                    if self.verbose:
-                        print(f"{C.GREEN}✓ Operation already confirmed, proceeding...{C.ENDC}")
-                else:
-                    # Handle ambiguous operations (resolve before confirming)
-                    if risk_info['risk_type'] == 'ambiguous':
-                        enhanced_instruction = self._resolve_ambiguity(agent_name, instruction, risk_info)
-                        if enhanced_instruction is None:
-                            # User cancelled during ambiguity resolution
-                            result = "⚠️ Operation cancelled by user"
-                            # Skip to next iteration
-                            function_result = {'name': tool_name, 'result': result}
-                            response_task = asyncio.create_task(
-                                self.chat.send_message_with_functions("", function_result)
-                            )
-                            await self._spinner(response_task, "Updating")
-                            llm_response = response_task.result()
-                            response = llm_response.metadata.get('response_object') if llm_response.metadata else None
-                            iteration += 1
-                            continue
-                        instruction = enhanced_instruction
-                        # Update signature with enhanced instruction
-                        operation_sig = self._create_operation_signature(agent_name, instruction, risk_info['risk_type'])
-                        # Track ambiguous operation as confirmed (user already selected option)
-                        self.confirmed_operations.add(operation_sig)
-                        if self.verbose:
-                            print(f"{C.CYAN}📝 Ambiguous operation resolved and tracked{C.ENDC}")
-
-                    # Ask for confirmation for other risky operations
-                    if risk_info['risk_type'] != 'ambiguous':
-                        confirmed = self._ask_confirmation(risk_info, instruction)
-                        if not confirmed:
-                            result = "⚠️ Operation cancelled by user"
-                            # Skip to next iteration
-                            function_result = {'name': tool_name, 'result': result}
-                            response_task = asyncio.create_task(
-                                self.chat.send_message_with_functions("", function_result)
-                            )
-                            await self._spinner(response_task, "Updating")
-                            llm_response = response_task.result()
-                            response = llm_response.metadata.get('response_object') if llm_response.metadata else None
-                            iteration += 1
-                            continue
-
-                    # Track this confirmation
-                    self.confirmed_operations.add(operation_sig)
-                    if self.verbose:
-                        print(f"{C.CYAN}📝 Operation confirmed and tracked{C.ENDC}")
+            # NOTE: Old confirmation systems removed - now using MandatoryConfirmationEnforcer
+            # The new system confirms operations inline in call_sub_agent() for Slack/Notion
 
             # Feature #8: Intelligent Retry - Track and enhance retries
             operation_key = self._get_operation_key(agent_name, instruction)
@@ -1063,68 +1168,6 @@ Provide a clear instruction describing what you want to accomplish.""",
             response = llm_response.metadata.get('response_object') if llm_response.metadata else None
             
             iteration += 1
-        
-        # NEW: Handle any remaining queued actions
-        if confirmation_queue.get_pending_count() > 0:
-            if self.verbose:
-                print(f"\n{C.CYAN}[QUEUE] Processing remaining {confirmation_queue.get_pending_count()} queued action(s){C.ENDC}\n")
-
-            while confirmation_queue.get_pending_count() > 0:
-                batch = await confirmation_queue.prepare_batch()
-                batch.mark_presented()
-
-                confirmation_ui.present_batch(batch.actions)
-                decisions = confirmation_ui.collect_decisions(batch.actions)
-                batch.mark_decisions_received()
-
-                # Process actions same as in the main loop
-                for action_in_batch in batch.actions:
-                    agent = self.sub_agents.get(action_in_batch.agent_name)
-                    if not agent:
-                        continue
-
-                    if action_in_batch.id in decisions['confirmed']:
-                        final_instruction = action_in_batch.instruction
-                        if action_in_batch.id in decisions['edited']:
-                            edits = decisions['edited'][action_in_batch.id]
-                            final_instruction = await agent.apply_parameter_edits(
-                                action_in_batch.instruction, edits
-                            )
-
-                        action_in_batch.mark_confirmed()
-                        action_in_batch.mark_executing()
-
-                        result = await self.call_sub_agent(
-                            action_in_batch.agent_name,
-                            final_instruction,
-                            action_in_batch.context
-                        )
-
-                        if result.startswith("Error") or result.startswith("⚠️"):
-                            action_in_batch.mark_failed(result)
-                        else:
-                            action_in_batch.mark_succeeded(result)
-
-                        func_result = {'name': f"use_{action_in_batch.agent_name}_agent", 'result': result}
-                        response_task = asyncio.create_task(
-                            self.chat.send_message_with_functions("", func_result)
-                        )
-                        await self._spinner(response_task, "Processing result")
-                        llm_response = response_task.result()
-
-                    elif action_in_batch.id in decisions['rejected']:
-                        reason = decisions['rejected'][action_in_batch.id]
-                        action_in_batch.mark_rejected(reason)
-                        result = f"⚠️ Operation cancelled by user: {reason}"
-
-                        func_result = {'name': f"use_{action_in_batch.agent_name}_agent", 'result': result}
-                        response_task = asyncio.create_task(
-                            self.chat.send_message_with_functions("", func_result)
-                        )
-                        await self._spinner(response_task, "Processing result")
-                        llm_response = response_task.result()
-
-                confirmation_queue.archive_batch()
 
         if iteration >= max_iterations:
             print(f"{C.YELLOW}⚠ Warning: Reached maximum orchestration iterations{C.ENDC}")
@@ -1604,6 +1647,51 @@ Provide a clear instruction describing what you want to accomplish.""",
             except Exception as e:
                 # Always print errors
                 print(f"{C.RED}  ✗ Error shutting down {agent_name}: {e}{C.ENDC}")
+
+        # ===================================================================
+        # SAVE ANALYTICS AND PREFERENCES
+        # ===================================================================
+
+        # End analytics session
+        if hasattr(self, 'analytics'):
+            try:
+                self.analytics.end_session()
+
+                # Save analytics
+                analytics_dir = Path("logs/analytics")
+                analytics_dir.mkdir(parents=True, exist_ok=True)
+                analytics_file = analytics_dir / f"{self.session_id}.json"
+                self.analytics.save_to_file(str(analytics_file))
+
+                if self.verbose:
+                    print(f"{C.GREEN}  ✓ Analytics saved: {analytics_file}{C.ENDC}")
+                    print(f"{C.CYAN}    {self.analytics.generate_summary_report()}{C.ENDC}")
+            except Exception as e:
+                logger.warning(f"Failed to save analytics: {e}")
+
+        # Save user preferences
+        if hasattr(self, 'user_prefs') and hasattr(self, 'prefs_file'):
+            try:
+                self.user_prefs.save_to_file(str(self.prefs_file))
+                if self.verbose:
+                    print(f"{C.GREEN}  ✓ Preferences saved: {self.prefs_file}{C.ENDC}")
+            except Exception as e:
+                logger.warning(f"Failed to save preferences: {e}")
+
+        # Display retry statistics
+        if hasattr(self, 'retry_manager') and self.verbose:
+            stats = self.retry_manager.get_statistics()
+            if stats['total_operations'] > 0:
+                print(f"{C.CYAN}  📊 Retry stats: {stats['total_operations']} ops, "
+                      f"{stats['avg_retries_per_operation']:.1f} avg retries{C.ENDC}")
+
+        # Display undo statistics
+        if hasattr(self, 'undo_manager') and self.verbose:
+            undo_stats = self.undo_manager.get_statistics()
+            if undo_stats['total_operations'] > 0:
+                print(f"{C.CYAN}  ↩️  Undo: {undo_stats['available_for_undo']} operations available{C.ENDC}")
+
+        # ===================================================================
 
         # Close session logger and generate summary
         if hasattr(self, 'session_logger'):

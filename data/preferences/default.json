@@ -1,0 +1,33 @@
+{
+  "user_id": "default",
+  "confirmation_prefs": {},
+  "agent_prefs": {},
+  "communication_style": {
+    "prefers_verbose": false,
+    "prefers_technical": true,
+    "prefers_emojis": false,
+    "sample_count": 19,
+    "confidence": 0.9
+  },
+  "working_hours": {
+    "typical_start_hour": 10,
+    "typical_end_hour": 22,
+    "active_days": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "timezone_offset": 0,
+    "sample_count": 19,
+    "confidence": 0.38
+  },
+  "statistics": {
+    "total_interactions": 0,
+    "confirmations_given": 0,
+    "confirmations_rejected": 0,
+    "auto_executions": 0
+  },
+  "saved_at": 1762493807.206793
+}
