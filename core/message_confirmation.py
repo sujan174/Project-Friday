@@ -283,25 +283,49 @@ class MandatoryConfirmationEnforcer:
         """
         agent_lower = agent_name.lower()
 
-        # Slack: Check config setting first
+        # Slack: Only confirm WRITE operations (sending messages, not reading)
         if agent_lower == 'slack' and Config.CONFIRM_SLACK_MESSAGES:
-            if any(keyword in instruction.lower() for keyword in [
-                'send', 'post', 'message', 'notify', 'announce'
-            ]):
+            # Write operations (need confirmation)
+            write_keywords = ['send', 'post', 'message to', 'notify', 'announce', 'reply', 'react', 'delete']
+            # Read operations (no confirmation needed)
+            read_keywords = ['list', 'get', 'search', 'find', 'show', 'view', 'read', 'channels', 'users']
+
+            # If it's a read operation, don't confirm
+            if any(read_kw in instruction.lower() for read_kw in read_keywords):
+                return False
+
+            # If it's a write operation, confirm
+            if any(write_kw in instruction.lower() for write_kw in write_keywords):
                 return True
 
-        # Notion: Always confirm create/update operations
+        # Notion: Only confirm WRITE operations (not reads)
         if agent_lower == 'notion':
-            if any(keyword in instruction.lower() for keyword in [
-                'create', 'add', 'update', 'write', 'insert'
-            ]):
+            # Write operations (need confirmation)
+            write_keywords = ['create', 'add', 'update', 'write', 'insert', 'delete', 'edit']
+            # Read operations (no confirmation needed)
+            read_keywords = ['get', 'search', 'list', 'find', 'show', 'view', 'read', 'pages', 'database']
+
+            # If it's a read operation, don't confirm
+            if any(read_kw in instruction.lower() for read_kw in read_keywords):
+                return False
+
+            # If it's a write operation, confirm
+            if any(write_kw in instruction.lower() for write_kw in write_keywords):
                 return True
 
-        # Jira: Check config setting
+        # Jira: Only confirm WRITE operations (not reads)
         if agent_lower == 'jira' and Config.CONFIRM_JIRA_OPERATIONS:
-            if any(keyword in instruction.lower() for keyword in [
-                'create', 'update', 'delete', 'transition', 'assign'
-            ]):
+            # Only confirm write operations
+            write_keywords = ['create', 'update', 'delete', 'transition', 'assign', 'add comment', 'close', 'edit']
+            # Exclude read operations
+            read_keywords = ['get', 'search', 'list', 'find', 'show', 'view', 'assigned to me', 'my tasks']
+
+            # If it's a read operation, don't confirm
+            if any(read_kw in instruction.lower() for read_kw in read_keywords):
+                return False
+
+            # If it's a write operation, confirm
+            if any(write_kw in instruction.lower() for write_kw in write_keywords):
                 return True
 
         return False
