@@ -34,6 +34,14 @@ current_session_id: ContextVar[Optional[str]] = ContextVar('session_id', default
 current_operation_id: ContextVar[Optional[str]] = ContextVar('operation_id', default=None)
 current_agent_name: ContextVar[Optional[str]] = ContextVar('agent_name', default=None)
 
+# Import distributed tracing context
+try:
+    from .distributed_tracing import TraceContext
+    TRACING_AVAILABLE = True
+except ImportError:
+    TRACING_AVAILABLE = False
+    TraceContext = None
+
 
 class LogContext:
     """Manages logging context for request tracing"""
@@ -63,11 +71,19 @@ class LogContext:
     @staticmethod
     def get_context() -> Dict[str, Any]:
         """Get current context as dict"""
-        return {
+        context = {
             'session_id': current_session_id.get(),
             'operation_id': current_operation_id.get(),
             'agent_name': current_agent_name.get()
         }
+
+        # Add distributed tracing context if available
+        if TRACING_AVAILABLE and TraceContext:
+            trace_ctx = TraceContext.get_context()
+            context['trace_id'] = trace_ctx.get('trace_id')
+            context['span_id'] = trace_ctx.get('span_id')
+
+        return context
 
 
 # ============================================================================
@@ -306,7 +322,8 @@ class EnhancedLogger:
             if cls._config['enable_colors']:
                 console_format = (
                     '%(levelname)s | %(asctime)s | '
-                    '%(session_id)s | %(agent_name)s | '
+                    'trace=%(trace_id)s | span=%(span_id)s | '
+                    'session=%(session_id)s | agent=%(agent_name)s | '
                     '%(name)s:%(funcName)s:%(lineno)d | '
                     '%(message)s'
                 )
@@ -317,7 +334,8 @@ class EnhancedLogger:
             else:
                 console_format = (
                     '%(levelname)s | %(asctime)s | '
-                    '%(session_id)s | %(agent_name)s | '
+                    'trace=%(trace_id)s | span=%(span_id)s | '
+                    'session=%(session_id)s | agent=%(agent_name)s | '
                     '%(name)s:%(funcName)s:%(lineno)d | '
                     '%(message)s'
                 )
@@ -341,6 +359,7 @@ class EnhancedLogger:
 
             file_format = (
                 '%(asctime)s | %(levelname)-8s | '
+                'trace=%(trace_id)s | span=%(span_id)s | '
                 'session=%(session_id)s | op=%(operation_id)s | agent=%(agent_name)s | '
                 '%(name)s:%(funcName)s:%(lineno)d | '
                 '%(message)s'
