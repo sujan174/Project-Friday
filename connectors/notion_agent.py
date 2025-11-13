@@ -1,21 +1,4 @@
-"""
-Notion Agent - Production-Ready Connector for Notion Workspace
-
-This module provides a robust, intelligent agent for interacting with Notion through
-the Model Context Protocol (MCP). It enables seamless knowledge management, documentation,
-and workspace organization with comprehensive error handling and retry logic.
-
-Key Features:
-- Automatic retry with exponential backoff for transient failures
-- Smart content filtering (excludes tutorial/template pages)
-- Comprehensive error handling with context-aware messages
-- Operation tracking and statistics
-- Verbose logging for debugging
-- Intelligent page and database management
-
-Author: AI System
-Version: 2.0
-"""
+# Notion agent connector for workspace interaction via MCP
 
 import os
 import sys
@@ -31,7 +14,6 @@ import google.generativeai.protos as protos
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-# Add parent directory to path to import base_agent
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from connectors.base_agent import BaseAgent, safe_extract_response_text
 from connectors.agent_intelligence import (
@@ -48,18 +30,12 @@ from connectors.mcp_config import (
 )
 
 
-# ============================================================================
-# CONFIGURATION AND CONSTANTS
-# ============================================================================
-
 class RetryConfig:
-    """Configuration for retry logic with exponential backoff"""
     MAX_RETRIES = 3
-    INITIAL_DELAY = 1.0  # seconds
-    MAX_DELAY = 10.0     # seconds
+    INITIAL_DELAY = 1.0
+    MAX_DELAY = 10.0
     BACKOFF_FACTOR = 2.0
 
-    # Error types that should trigger a retry
     RETRYABLE_ERRORS = [
         "timeout",
         "connection",
@@ -70,20 +46,19 @@ class RetryConfig:
         "503",
         "502",
         "504",
-        "sse error",           # SSE-specific errors
+        "sse error",
         "sseerror",
-        "body timeout",        # Common in SSE connections
-        "terminated",          # Connection terminated
+        "body timeout",
+        "terminated",
         "stream closed",
         "connection closed",
-        "ECONNRESET",          # TCP connection reset
-        "ETIMEDOUT",           # Connection timeout
-        "fetch failed"         # Fetch API failures
+        "ECONNRESET",
+        "ETIMEDOUT",
+        "fetch failed"
     ]
 
 
 class ErrorType(Enum):
-    """Classification of error types for better handling"""
     AUTHENTICATION = "authentication"
     PERMISSION = "permission"
     NOT_FOUND = "not_found"
@@ -95,7 +70,6 @@ class ErrorType(Enum):
 
 @dataclass
 class OperationStats:
-    """Track statistics for agent operations"""
     total_operations: int = 0
     successful_operations: int = 0
     failed_operations: int = 0
@@ -103,7 +77,6 @@ class OperationStats:
     tools_called: Dict[str, int] = field(default_factory=dict)
 
     def record_operation(self, tool_name: str, success: bool, retry_count: int = 0):
-        """Record an operation for statistics tracking"""
         self.total_operations += 1
         self.tools_called[tool_name] = self.tools_called.get(tool_name, 0) + 1
 
@@ -115,7 +88,6 @@ class OperationStats:
         self.retries += retry_count
 
     def get_summary(self) -> str:
-        """Get a human-readable summary of operations"""
         success_rate = (self.successful_operations / self.total_operations * 100) if self.total_operations > 0 else 0
         return (
             f"Operations: {self.total_operations} total, "
@@ -126,28 +98,7 @@ class OperationStats:
         )
 
 
-# ============================================================================
-# MAIN AGENT CLASS
-# ============================================================================
-
 class Agent(BaseAgent):
-    """
-    Specialized agent for Notion operations via MCP
-
-    This agent provides intelligent, reliable interaction with Notion through:
-    - Smart content creation and organization
-    - Database management and querying
-    - Content discovery with intelligent filtering
-    - Automatic retry for transient failures
-    - Comprehensive error handling and reporting
-    - Operation tracking and statistics
-
-    Usage:
-        agent = Agent(verbose=True)
-        await agent.initialize()
-        result = await agent.execute("Create a meeting notes page for today")
-        await agent.cleanup()
-    """
 
     def __init__(
         self,
@@ -157,41 +108,28 @@ class Agent(BaseAgent):
     ,
         session_logger=None
     ):
-        """
-        Initialize the Notion agent
-
-        Args:
-            verbose: Enable detailed logging for debugging (default: False)
-                    session_logger: Optional session logger for tracking operations
-        """
         super().__init__()
 
-        # Session logging
         self.logger = session_logger
         self.agent_name = "notion"
 
-        # MCP Connection Components
         self.session: ClientSession = None
-        self.session_entered = False  # Track if session.__aenter__() succeeded
+        self.session_entered = False
         self.stdio_context = None
-        self.stdio_context_entered = False  # Track if stdio_context.__aenter__() succeeded
+        self.stdio_context_entered = False
         self.model = None
         self.available_tools = []
 
-        # Configuration
         self.verbose = verbose
         self.stats = OperationStats()
 
-        # Intelligence Components
         self.memory = ConversationMemory()
         self.knowledge = knowledge_base or WorkspaceKnowledge()
         self.shared_context = shared_context
         self.proactive = ProactiveAssistant('notion', verbose)
 
-        # Feature #1: Metadata Cache for faster operations
         self.metadata_cache = {}
 
-        # Schema type mapping for Gemini
         self.schema_type_map = {
             "string": protos.Type.STRING,
             "number": protos.Type.NUMBER,
@@ -201,15 +139,9 @@ class Agent(BaseAgent):
             "array": protos.Type.ARRAY,
         }
 
-        # System prompt - defines agent behavior and intelligence
         self.system_prompt = self._build_system_prompt()
 
-    # ========================================================================
-    # SYSTEM PROMPT - Agent Intelligence and Behavior
-    # ========================================================================
-
     def _build_system_prompt(self) -> str:
-        """Build the comprehensive system prompt that defines agent behavior"""
         return """You are an elite Notion workspace architect with deep expertise in knowledge management, information architecture, and productivity systems. Your mission is to help users build, organize, and maintain powerful, intuitive Notion workspaces that amplify their thinking and accelerate their work.
 
 # Your Capabilities
@@ -595,20 +527,9 @@ User: "show me databases"
 
 Remember: You're not just executing commands—you're helping users build a powerful second brain. Every page you create, every structure you organize, every search you perform should make their workspace more valuable and their thinking clearer. Notion is where knowledge lives and grows; treat it with the care and intelligence it deserves."""
 
-    # ========================================================================
-    # INITIALIZATION AND CONNECTION
-    # ========================================================================
-
     async def initialize(self):
-        """
-        Connect to Notion MCP server with timeout and retry handling
-
-        Raises:
-            ValueError: If required environment variables are missing
-            RuntimeError: If connection or initialization fails after retries
-        """
         max_retries = 2
-        connection_timeout = 30.0  # 30 seconds for initial connection
+        connection_timeout = 30.0
 
         for attempt in range(max_retries + 1):
             try:
@@ -616,11 +537,6 @@ Remember: You're not just executing commands—you're helping users build a powe
                     retry_msg = f" (attempt {attempt + 1}/{max_retries + 1})" if attempt > 0 else ""
                     print(f"[NOTION AGENT] Initializing connection to Notion MCP server{retry_msg}")
 
-                # Notion's official self-hosted MCP server
-                # Requires NOTION_TOKEN environment variable (from Notion integration)
-                # See: https://www.notion.so/profile/integrations to create integration
-
-                # Check for NOTION_TOKEN
                 notion_token = os.getenv("NOTION_TOKEN")
                 if not notion_token:
                     raise ValueError(
@@ -633,18 +549,14 @@ Remember: You're not just executing commands—you're helping users build a powe
                         "5. Share your Notion pages/databases with this integration"
                     )
 
-                # Prepare environment variables
                 env_vars = {**os.environ}
                 env_vars["NOTION_TOKEN"] = notion_token
 
                 if not self.verbose:
-                    # Suppress debug output
                     env_vars["DEBUG"] = ""
                     env_vars["NODE_ENV"] = "production"
                     env_vars["MCP_DEBUG"] = "0"
 
-                # Use official self-hosted Notion MCP server
-                # Use full path to npx to avoid PATH issues
                 import shutil
                 npx_path = shutil.which("npx") or "/usr/local/bin/npx"
 
@@ -654,28 +566,26 @@ Remember: You're not just executing commands—you're helping users build a powe
                     env=env_vars
                 )
 
-                # Wrap connection with timeout
                 try:
                     self.stdio_context = stdio_client(server_params)
                     stdio, write = await asyncio.wait_for(
                         self.stdio_context.__aenter__(),
                         timeout=connection_timeout
                     )
-                    self.stdio_context_entered = True  # Mark as successfully entered
+                    self.stdio_context_entered = True
 
                     self.session = ClientSession(stdio, write)
                     await asyncio.wait_for(
                         self.session.__aenter__(),
                         timeout=10.0
                     )
-                    self.session_entered = True  # Mark as successfully entered
+                    self.session_entered = True
 
                     await asyncio.wait_for(
                         self.session.initialize(),
                         timeout=10.0
                     )
 
-                    # Load tools with timeout
                     tools_list = await asyncio.wait_for(
                         self.session.list_tools(),
                         timeout=10.0
@@ -683,21 +593,17 @@ Remember: You're not just executing commands—you're helping users build a powe
                     self.available_tools = tools_list.tools
 
                 except asyncio.TimeoutError:
-                    # Clean up partial state before raising
                     await self._cleanup_connection()
                     raise RuntimeError(
                         f"Connection timeout after {connection_timeout}s. "
                         "The Notion MCP server may be slow or unavailable."
                     )
                 except Exception as e:
-                    # If connection fails, ensure we clean up partial state
                     await self._cleanup_connection()
                     raise
 
-                # Convert to Gemini format
                 gemini_tools = [self._build_function_declaration(tool) for tool in self.available_tools]
 
-                # Create model
                 self.model = genai.GenerativeModel(
                     'models/gemini-2.5-flash',
                     system_instruction=self.system_prompt,
@@ -706,16 +612,14 @@ Remember: You're not just executing commands—you're helping users build a powe
 
                 self.initialized = True
 
-                # Feature #1: Prefetch workspace metadata for faster operations
                 await self._prefetch_metadata()
 
                 if self.verbose:
                     print(f"[NOTION AGENT] Initialization complete. {len(self.available_tools)} tools available.")
 
-                return  # Success, exit retry loop
+                return
 
             except RuntimeError as e:
-                # Check if this is a retryable error
                 error_msg = str(e).lower()
                 is_retryable = any(keyword in error_msg for keyword in [
                     'timeout', 'connection', 'sse error', 'body timeout',
@@ -723,14 +627,13 @@ Remember: You're not just executing commands—you're helping users build a powe
                 ])
 
                 if is_retryable and attempt < max_retries:
-                    retry_delay = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
+                    retry_delay = 2 ** attempt
                     if self.verbose:
                         print(f"[NOTION AGENT] Connection failed: {e}")
                         print(f"[NOTION AGENT] Retrying in {retry_delay}s...")
                     await asyncio.sleep(retry_delay)
                     continue
                 else:
-                    # Not retryable or out of retries
                     raise RuntimeError(
                         f"Failed to initialize Notion agent after {attempt + 1} attempt(s): {e}\n"
                         "Troubleshooting steps:\n"
@@ -743,7 +646,6 @@ Remember: You're not just executing commands—you're helping users build a powe
                     )
 
             except Exception as e:
-                # Other errors - attempt retry
                 if attempt < max_retries:
                     retry_delay = 2 ** attempt
                     if self.verbose:
@@ -762,16 +664,7 @@ Remember: You're not just executing commands—you're helping users build a powe
                     )
 
     async def _prefetch_metadata(self):
-        """
-        Prefetch and cache Notion workspace metadata for faster operations (Feature #1)
-
-        Fetches accessible databases and pages at initialization time
-        to avoid discovery overhead on every operation.
-
-        Cache is persisted to knowledge base with a 1-hour TTL.
-        """
         try:
-            # Check if we have valid cached metadata
             cached = self.knowledge.get_metadata_cache('notion')
             if cached:
                 self.metadata_cache = cached
@@ -782,31 +675,25 @@ Remember: You're not just executing commands—you're helping users build a powe
             if self.verbose:
                 print(f"[NOTION AGENT] Prefetching metadata...")
 
-            # Fetch accessible databases
             databases = await self._fetch_accessible_databases()
 
-            # Store in cache
             self.metadata_cache = {
                 'databases': databases,
                 'fetched_at': asyncio.get_event_loop().time()
             }
 
-            # Persist to knowledge base
             self.knowledge.save_metadata_cache('notion', self.metadata_cache, ttl_seconds=3600)
 
             if self.verbose:
                 print(f"[NOTION AGENT] Cached metadata for {len(databases)} databases")
 
         except Exception as e:
-            # Graceful degradation: If prefetch fails, continue without cache
             if self.verbose:
                 print(f"[NOTION AGENT] Warning: Metadata prefetch failed: {e}")
             print(f"[NOTION AGENT] Continuing without metadata cache (operations may be slower)")
 
     async def _fetch_accessible_databases(self) -> Dict:
-        """Fetch accessible databases"""
         try:
-            # Use Notion MCP tool to list databases
             result = await self.session.call_tool("notion_search", {"query": ""})
 
             databases = {}
@@ -829,33 +716,24 @@ Remember: You're not just executing commands—you're helping users build a powe
                 print(f"[NOTION AGENT] Could not fetch databases: {e}")
             return {}
 
-    # ========================================================================
-    # CORE EXECUTION ENGINE
-    # ========================================================================
-
     async def execute(self, instruction: str) -> str:
-        """Execute a Notion task with enhanced error handling and retry logic"""
         if not self.initialized:
             return self._format_error(Exception("Notion agent not initialized. Please restart the system."))
 
         try:
-            # Step 1: Resolve ambiguous references using conversation memory
             resolved_instruction = self._resolve_references(instruction)
 
             if resolved_instruction != instruction and self.verbose:
                 print(f"[NOTION AGENT] Resolved instruction: {resolved_instruction}")
 
-            # Step 2: Check for resources from other agents
             context_from_other_agents = self._get_cross_agent_context()
             if context_from_other_agents and self.verbose:
                 print(f"[NOTION AGENT] Found context from other agents")
 
-            # Use resolved instruction for the rest
             instruction = resolved_instruction
             chat = self.model.start_chat()
             response = await chat.send_message_async(instruction)
 
-            # Handle function calling loop with retry logic
             max_iterations = 15
             iteration = 0
             actions_taken = []
@@ -871,13 +749,11 @@ Remember: You're not just executing commands—you're helping users build a powe
 
                 actions_taken.append(tool_name)
 
-                # Execute tool with retry logic
                 result_text, error_msg = await self._execute_tool_with_retry(
                     tool_name,
                     tool_args
                 )
 
-                # Send result back to LLM
                 response = await self._send_function_response(
                     chat,
                     tool_name,
@@ -888,21 +764,17 @@ Remember: You're not just executing commands—you're helping users build a powe
                 iteration += 1
 
             if iteration >= max_iterations:
-                # Safely extract response text
                 response_text = self._safe_extract_response_text(response)
                 return (
                     f"{response_text}\n\n"
                     "⚠ Note: Reached maximum operation limit. The task may be incomplete."
                 )
 
-            # Safely extract response text
             final_response = self._safe_extract_response_text(response)
 
             if self.verbose:
                 print(f"\n[NOTION AGENT] Execution complete. {self.stats.get_summary()}")
 
-            
-            # Remember resources and add proactive suggestions
             self._remember_created_resources(final_response, instruction)
 
             operation_type = self._infer_operation_type(instruction)
@@ -917,7 +789,6 @@ Remember: You're not just executing commands—you're helping users build a powe
             return self._format_error(e)
 
     def _resolve_references(self, instruction: str) -> str:
-        """Resolve ambiguous references like 'it', 'that', 'this' using conversation memory"""
         ambiguous_terms = ['it', 'that', 'this', 'the page', 'the database', 'the entry']
 
         for term in ambiguous_terms:
@@ -933,11 +804,9 @@ Remember: You're not just executing commands—you're helping users build a powe
         return instruction
 
     def _get_cross_agent_context(self) -> str:
-        """Get context from other agents"""
         if not self.shared_context:
             return ""
 
-        # Get only recent resources to avoid overwhelming context (limit to 5 most recent)
         recent_resources = self.shared_context.get_recent_resources(limit=5)
         if not recent_resources:
             return ""
@@ -952,10 +821,8 @@ Remember: You're not just executing commands—you're helping users build a powe
         return "; ".join(context_parts) if context_parts else ""
 
     def _remember_created_resources(self, response: str, instruction: str):
-        """Extract and remember created resources from response"""
         import re
 
-        # Pattern to match Notion page URLs or IDs
         page_pattern = r'notion\.so/([a-f0-9]{32})'
         matches = re.findall(page_pattern, response)
 
@@ -979,7 +846,6 @@ Remember: You're not just executing commands—you're helping users build a powe
                 )
 
     def _infer_operation_type(self, instruction: str) -> str:
-        """Infer what type of operation was performed"""
         instruction_lower = instruction.lower()
 
         if 'create' in instruction_lower or 'new' in instruction_lower:
@@ -996,7 +862,6 @@ Remember: You're not just executing commands—you're helping users build a powe
             return 'unknown'
 
     def _extract_function_call(self, response) -> Optional[Any]:
-        """Extract function call from LLM response"""
         parts = response.candidates[0].content.parts
         has_function_call = any(
             hasattr(part, 'function_call') and part.function_call
@@ -1017,10 +882,9 @@ Remember: You're not just executing commands—you're helping users build a powe
         tool_name: str,
         tool_args: Dict
     ) -> Tuple[Optional[str], Optional[str]]:
-        """Execute a tool with automatic retry on transient failures and timeout protection"""
         retry_count = 0
         delay = RetryConfig.INITIAL_DELAY
-        operation_timeout = 60.0  # 60 seconds per tool operation
+        operation_timeout = 60.0
 
         while retry_count <= RetryConfig.MAX_RETRIES:
             try:
@@ -1030,8 +894,6 @@ Remember: You're not just executing commands—you're helping users build a powe
                     if self.verbose:
                         print(f"[NOTION AGENT] Arguments: {json.dumps(tool_args, indent=2)[:500]}")
 
-                # Wrap tool call with timeout to prevent SSE hangs
-                # Log tool call start
                 start_time = time.time()
 
                 try:
@@ -1040,7 +902,6 @@ Remember: You're not just executing commands—you're helping users build a powe
                         timeout=operation_timeout
                     )
                 except asyncio.TimeoutError:
-                    # Log timeout
                     if self.logger:
                         self.logger.log_tool_call(self.agent_name, tool_name, None, success=False, error="Timeout")
 
@@ -1049,7 +910,6 @@ Remember: You're not just executing commands—you're helping users build a powe
                         "The Notion MCP server may be slow or experiencing issues."
                     )
 
-                # Log tool call completion
                 duration = time.time() - start_time
                 if self.logger:
                     self.logger.log_tool_call(self.agent_name, tool_name, duration, success=True)

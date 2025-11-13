@@ -1,22 +1,3 @@
-"""
-Agent Orchestration Logger
-
-Specialized logging for agent orchestration and coordination.
-Tracks agent lifecycle, state transitions, and inter-agent communication.
-
-Features:
-- Agent state machine logging
-- Agent health monitoring
-- Task routing decisions
-- Inter-agent messages
-- Resource allocation
-- Performance metrics per agent
-- Failure tracking and recovery
-
-Author: AI System
-Version: 1.0
-"""
-
 import time
 import json
 from typing import Dict, List, Optional, Any
@@ -29,12 +10,7 @@ from .distributed_tracing import get_global_tracer, traced_span, SpanKind, SpanS
 from .logging_config import get_logger
 
 
-# ============================================================================
-# AGENT STATES
-# ============================================================================
-
 class AgentState(Enum):
-    """Agent lifecycle states"""
     UNINITIALIZED = "UNINITIALIZED"
     INITIALIZING = "INITIALIZING"
     READY = "READY"
@@ -47,7 +23,6 @@ class AgentState(Enum):
 
 
 class TaskStatus(Enum):
-    """Task execution status"""
     PENDING = "PENDING"
     ASSIGNED = "ASSIGNED"
     EXECUTING = "EXECUTING"
@@ -57,13 +32,8 @@ class TaskStatus(Enum):
     CANCELLED = "CANCELLED"
 
 
-# ============================================================================
-# DATA MODELS
-# ============================================================================
-
 @dataclass
 class AgentStateTransition:
-    """Records an agent state transition"""
     agent_name: str
     from_state: AgentState
     to_state: AgentState
@@ -72,7 +42,6 @@ class AgentStateTransition:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary"""
         return {
             'agent_name': self.agent_name,
             'from_state': self.from_state.value,
@@ -86,7 +55,6 @@ class AgentStateTransition:
 
 @dataclass
 class TaskAssignment:
-    """Records a task assignment to an agent"""
     task_id: str
     task_name: str
     assigned_agent: str
@@ -99,13 +67,11 @@ class TaskAssignment:
 
     @property
     def duration_ms(self) -> Optional[float]:
-        """Task duration in milliseconds"""
         if self.completed_at and self.started_at:
             return (self.completed_at - self.started_at) * 1000
         return None
 
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary"""
         return {
             'task_id': self.task_id,
             'task_name': self.task_name,
@@ -125,7 +91,6 @@ class TaskAssignment:
 
 @dataclass
 class AgentRoutingDecision:
-    """Records a routing decision"""
     timestamp: float
     task_name: str
     selected_agent: str
@@ -135,7 +100,6 @@ class AgentRoutingDecision:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary"""
         return {
             'timestamp': self.timestamp,
             'timestamp_iso': datetime.fromtimestamp(self.timestamp).isoformat(),
@@ -150,7 +114,6 @@ class AgentRoutingDecision:
 
 @dataclass
 class AgentHealthRecord:
-    """Health status of an agent"""
     agent_name: str
     timestamp: float
     state: AgentState
@@ -164,7 +127,6 @@ class AgentHealthRecord:
     warnings: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary"""
         return {
             'agent_name': self.agent_name,
             'timestamp': self.timestamp,
@@ -181,64 +143,30 @@ class AgentHealthRecord:
         }
 
 
-# ============================================================================
-# ORCHESTRATION LOGGER
-# ============================================================================
-
 class OrchestrationLogger:
-    """
-    Specialized logger for agent orchestration
-
-    Tracks:
-    - Agent state transitions
-    - Task assignments and execution
-    - Routing decisions
-    - Agent health
-    - Inter-agent communication
-    - Resource allocation
-    """
-
     def __init__(
         self,
         session_id: str,
         export_dir: Optional[str] = "logs/orchestration",
         verbose: bool = False
     ):
-        """
-        Initialize orchestration logger
-
-        Args:
-            session_id: Session ID
-            export_dir: Directory for exports
-            verbose: Enable verbose logging
-        """
         self.session_id = session_id
         self.export_dir = Path(export_dir) if export_dir else None
         self.verbose = verbose
 
-        # Get standard logger
         self.logger = get_logger(__name__)
-
-        # Get tracer
         self.tracer = get_global_tracer()
 
-        # Create export directory
         if self.export_dir:
             self.export_dir.mkdir(parents=True, exist_ok=True)
 
-        # State tracking
         self.agent_states: Dict[str, AgentState] = {}
         self.state_transitions: List[AgentStateTransition] = []
         self.task_assignments: Dict[str, TaskAssignment] = {}
         self.routing_decisions: List[AgentRoutingDecision] = []
         self.health_records: Dict[str, AgentHealthRecord] = {}
 
-        # Metrics
         self.start_time = time.time()
-
-    # ========================================================================
-    # AGENT LIFECYCLE LOGGING
-    # ========================================================================
 
     def log_agent_initialized(
         self,
@@ -246,7 +174,6 @@ class OrchestrationLogger:
         capabilities: Optional[List[str]] = None,
         metadata: Optional[Dict[str, Any]] = None
     ):
-        """Log agent initialization"""
         with traced_span(
             f"agent.initialize.{agent_name}",
             kind=SpanKind.AGENT
@@ -275,7 +202,6 @@ class OrchestrationLogger:
             )
 
     def log_agent_ready(self, agent_name: str, metadata: Optional[Dict[str, Any]] = None):
-        """Log agent ready state"""
         with traced_span(
             f"agent.ready.{agent_name}",
             kind=SpanKind.AGENT
@@ -304,7 +230,6 @@ class OrchestrationLogger:
         error: str,
         metadata: Optional[Dict[str, Any]] = None
     ):
-        """Log agent error"""
         with traced_span(
             f"agent.error.{agent_name}",
             kind=SpanKind.AGENT
@@ -332,10 +257,6 @@ class OrchestrationLogger:
                 }
             )
 
-    # ========================================================================
-    # TASK LIFECYCLE LOGGING
-    # ========================================================================
-
     def log_task_assigned(
         self,
         task_id: str,
@@ -343,7 +264,6 @@ class OrchestrationLogger:
         agent_name: str,
         metadata: Optional[Dict[str, Any]] = None
     ):
-        """Log task assignment"""
         with traced_span(
             f"task.assign.{task_name}",
             kind=SpanKind.ORCHESTRATION
@@ -364,7 +284,6 @@ class OrchestrationLogger:
 
             self.task_assignments[task_id] = assignment
 
-            # Update agent state
             self._transition_state(
                 agent_name,
                 self.agent_states.get(agent_name, AgentState.IDLE),
@@ -384,7 +303,6 @@ class OrchestrationLogger:
             )
 
     def log_task_started(self, task_id: str):
-        """Log task execution started"""
         if task_id not in self.task_assignments:
             self.logger.warning(f"Task not found: {task_id}")
             return
@@ -414,7 +332,6 @@ class OrchestrationLogger:
         error: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None
     ):
-        """Log task completion"""
         if task_id not in self.task_assignments:
             self.logger.warning(f"Task not found: {task_id}")
             return
@@ -445,7 +362,6 @@ class OrchestrationLogger:
             else:
                 span.set_status(SpanStatus.OK)
 
-            # Update agent state back to IDLE
             self._transition_state(
                 assignment.assigned_agent,
                 AgentState.BUSY,
@@ -478,10 +394,6 @@ class OrchestrationLogger:
                     }
                 )
 
-    # ========================================================================
-    # ROUTING DECISIONS
-    # ========================================================================
-
     def log_routing_decision(
         self,
         task_name: str,
@@ -491,7 +403,6 @@ class OrchestrationLogger:
         confidence: Optional[float] = None,
         metadata: Optional[Dict[str, Any]] = None
     ):
-        """Log an agent routing decision"""
         with traced_span(
             f"routing.decision.{task_name}",
             kind=SpanKind.ORCHESTRATION
@@ -530,17 +441,12 @@ class OrchestrationLogger:
                 }
             )
 
-    # ========================================================================
-    # HEALTH MONITORING
-    # ========================================================================
-
     def log_agent_health(
         self,
         agent_name: str,
         is_healthy: bool,
         metrics: Optional[Dict[str, Any]] = None
     ):
-        """Log agent health status"""
         health_record = AgentHealthRecord(
             agent_name=agent_name,
             timestamp=time.time(),
@@ -558,10 +464,6 @@ class OrchestrationLogger:
                 extra=health_record.to_dict()
             )
 
-    # ========================================================================
-    # INTERNAL METHODS
-    # ========================================================================
-
     def _transition_state(
         self,
         agent_name: str,
@@ -570,7 +472,6 @@ class OrchestrationLogger:
         reason: str,
         metadata: Dict[str, Any]
     ):
-        """Record a state transition"""
         transition = AgentStateTransition(
             agent_name=agent_name,
             from_state=from_state,
@@ -589,12 +490,7 @@ class OrchestrationLogger:
                 extra=transition.to_dict()
             )
 
-    # ========================================================================
-    # EXPORT & REPORTING
-    # ========================================================================
-
     def export_session_summary(self) -> Dict[str, Any]:
-        """Export orchestration summary"""
         summary = {
             'session_id': self.session_id,
             'start_time': self.start_time,
@@ -607,7 +503,6 @@ class OrchestrationLogger:
             'statistics': self._calculate_statistics()
         }
 
-        # Export to file
         if self.export_dir:
             filename = f"orchestration_{self.session_id}_{int(self.start_time)}.json"
             filepath = self.export_dir / filename
@@ -621,7 +516,6 @@ class OrchestrationLogger:
         return summary
 
     def _calculate_statistics(self) -> Dict[str, Any]:
-        """Calculate orchestration statistics"""
         total_tasks = len(self.task_assignments)
         succeeded_tasks = sum(1 for t in self.task_assignments.values() if t.status == TaskStatus.SUCCEEDED)
         failed_tasks = sum(1 for t in self.task_assignments.values() if t.status == TaskStatus.FAILED)

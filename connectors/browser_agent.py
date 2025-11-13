@@ -1,23 +1,3 @@
-"""
-Browser Agent - Headless Browser Automation via Playwright MCP
-
-This module provides a robust, intelligent agent for browser automation through
-the Model Context Protocol (MCP). It enables web scraping, form filling,
-screenshot capture, and complex web interactions with comprehensive error handling.
-
-Features:
-- Headless browser automation via Microsoft Playwright MCP
-- Navigate websites, click elements, fill forms
-- Extract data from dynamic pages
-- Capture screenshots and PDFs
-- JavaScript execution support
-- Intelligent retry and error handling
-- Metadata caching for faster operations
-- Proactive suggestions
-
-Author: AI System
-Version: 1.0
-"""
 
 import os
 import asyncio
@@ -43,7 +23,6 @@ from connectors.agent_intelligence import (
 
 @dataclass
 class OperationStats:
-    """Track browser operation statistics"""
     total_operations: int = 0
     successful_operations: int = 0
     failed_operations: int = 0
@@ -70,7 +49,6 @@ class OperationStats:
 
 @dataclass
 class RetryConfig:
-    """Retry configuration for resilient browser operations"""
     MAX_RETRIES: int = 3
     BASE_DELAY: float = 1.0
     MAX_DELAY: float = 10.0
@@ -78,60 +56,29 @@ class RetryConfig:
 
 
 class Agent(BaseAgent):
-    """
-    Intelligent Browser Automation Agent using Microsoft Playwright MCP
-
-    This agent provides intelligent, reliable web automation through:
-    - Headless browser control (Chromium, Firefox, WebKit)
-    - Page navigation and interaction
-    - Data extraction from dynamic websites
-    - Screenshot and PDF generation
-    - Form automation
-    - JavaScript execution
-    - Automatic retry for transient failures
-    - Comprehensive error handling and reporting
-    - Operation tracking and statistics
-    """
-
     def __init__(self, verbose: bool = False, shared_context: Optional[SharedContext] = None,
         session_logger=None
     ):
-        """
-        Initialize Browser Agent
-
-        Args:
-            verbose: Enable detailed logging
-            shared_context: Optional shared context for cross-agent coordination
-                    session_logger: Optional session logger for tracking operations
-        """
         super().__init__()
 
-        # Session logging
         self.logger = session_logger
         self.agent_name = "browser"
-
         self.verbose = verbose
         self.initialized = False
 
-        # MCP connection components
         self.session: Optional[ClientSession] = None
         self.stdio_context = None
         self.available_tools: List[Any] = []
         self.model: Optional[genai.GenerativeModel] = None
 
-        # Intelligence components (Feature #1, #8, #11)
         self.memory = ConversationMemory()
         self.knowledge = WorkspaceKnowledge()
         self.shared_context = shared_context
         self.proactive = ProactiveAssistant('browser', verbose)
 
-        # Statistics tracking
         self.stats = OperationStats()
-
-        # Feature #1: Metadata cache for faster operations
         self.metadata_cache = {}
 
-        # Schema type mapping for Gemini
         self.schema_type_map = {
             "string": protos.Type.STRING,
             "number": protos.Type.NUMBER,
@@ -141,11 +88,9 @@ class Agent(BaseAgent):
             "array": protos.Type.ARRAY,
         }
 
-        # System prompt - defines agent behavior
         self.system_prompt = self._build_system_prompt()
 
     def _build_system_prompt(self) -> str:
-        """Build the comprehensive system prompt that defines agent behavior"""
         return """You are an expert web automation specialist with deep expertise in browser automation, web scraping, and data extraction. Your mission is to help users interact with websites programmatically, extract information, automate repetitive tasks, and test web applications.
 
 **Core Capabilities**:
@@ -276,36 +221,21 @@ User: "click the submit button"
 Remember: Be respectful, efficient, and accurate. Web automation is powerful - use it responsibly."""
 
     async def initialize(self) -> bool:
-        """
-        Initialize the browser agent by connecting to Playwright MCP server
-
-        Returns:
-            bool: True if initialization succeeded, False otherwise
-        """
         try:
             if self.verbose:
                 print(f"[BROWSER AGENT] Initializing connection to Playwright MCP server")
 
-            # Create MCP server parameters for Playwright
-            # Uses official Microsoft Playwright MCP via npx
             server_params = StdioServerParameters(
                 command="npx",
                 args=["-y", "@playwright/mcp"],
                 env=None
             )
 
-            # Connect to MCP server
             await self._connect_to_mcp(server_params)
-
-            # Load available tools
             await self._load_tools()
-
-            # Initialize Gemini model with tools
             self._initialize_model()
 
             self.initialized = True
-
-            # Feature #1: Prefetch metadata for faster operations
             await self._prefetch_metadata()
 
             if self.verbose:
@@ -322,13 +252,6 @@ Remember: Be respectful, efficient, and accurate. Web automation is powerful - u
             return False
 
     async def _connect_to_mcp(self, server_params: StdioServerParameters):
-        """
-        Establish connection to MCP server
-
-        Args:
-            server_params: Server configuration parameters
-                    session_logger: Optional session logger for tracking operations
-        """
         self.stdio_context = stdio_client(server_params)
         stdio, write = await self.stdio_context.__aenter__()
         self.session = ClientSession(stdio, write)
@@ -337,12 +260,6 @@ Remember: Be respectful, efficient, and accurate. Web automation is powerful - u
         await self.session.initialize()
 
     async def _load_tools(self):
-        """
-        Load available tools from MCP server
-
-        Raises:
-            RuntimeError: If no tools are available
-        """
         tools_list = await self.session.list_tools()
         self.available_tools = tools_list.tools
 
@@ -350,13 +267,8 @@ Remember: Be respectful, efficient, and accurate. Web automation is powerful - u
             raise RuntimeError("No tools available from Playwright MCP server")
 
     def _initialize_model(self):
-        """
-        Initialize the Gemini AI model with available tools
-        """
-        # Convert MCP tools to Gemini format
         gemini_tools = [self._build_function_declaration(tool) for tool in self.available_tools]
 
-        # Create model with configuration
         self.model = genai.GenerativeModel(
             'models/gemini-2.5-flash',
             system_instruction=self.system_prompt,
@@ -364,14 +276,7 @@ Remember: Be respectful, efficient, and accurate. Web automation is powerful - u
         )
 
     async def _prefetch_metadata(self):
-        """
-        Prefetch and cache browser metadata for faster operations (Feature #1)
-
-        This method caches common browser configurations, viewport sizes, etc.
-        The cache is persisted to the knowledge base with a 1-hour TTL.
-        """
         try:
-            # Check if we have valid cached metadata
             cached = self.knowledge.get_metadata_cache('browser')
             if cached:
                 self.metadata_cache = cached
@@ -382,7 +287,6 @@ Remember: Be respectful, efficient, and accurate. Web automation is powerful - u
             if self.verbose:
                 print(f"[BROWSER AGENT] Prefetching metadata...")
 
-            # Store common configurations
             self.metadata_cache = {
                 'viewports': {
                     'desktop': {'width': 1920, 'height': 1080},
@@ -397,25 +301,17 @@ Remember: Be respectful, efficient, and accurate. Web automation is powerful - u
                 'fetched_at': asyncio.get_event_loop().time()
             }
 
-            # Persist to knowledge base
             self.knowledge.save_metadata_cache('browser', self.metadata_cache, ttl_seconds=3600)
 
             if self.verbose:
                 print(f"[BROWSER AGENT] Cached browser metadata")
 
         except Exception as e:
-            # Graceful degradation: If prefetch fails, continue without cache
             if self.verbose:
                 print(f"[BROWSER AGENT] Warning: Metadata prefetch failed: {e}")
             print(f"[BROWSER AGENT] Continuing without metadata cache (operations may be slower)")
 
     async def get_capabilities(self) -> List[str]:
-        """
-        Get list of browser automation capabilities
-
-        Returns:
-            List of capability descriptions
-        """
         return [
             "Navigate to websites and URLs",
             "Click buttons and interactive elements",
@@ -430,26 +326,14 @@ Remember: Be respectful, efficient, and accurate. Web automation is powerful - u
         ]
 
     async def execute(self, instruction: str) -> str:
-        """
-        Execute browser automation instruction
-
-        Args:
-            instruction: Natural language instruction from user
-
-        Returns:
-            str: Result of the browser operation
-                    session_logger: Optional session logger for tracking operations
-        """
         if not self.initialized:
             return self._format_error(Exception("Browser agent not initialized"))
 
         try:
-            # Resolve ambiguous references using conversation memory
             resolved_instruction = self._resolve_references(instruction)
             if resolved_instruction != instruction and self.verbose:
                 print(f"[BROWSER AGENT] Resolved instruction: {resolved_instruction}")
 
-            # Check shared context from other agents
             context_from_other_agents = {}
             if self.shared_context:
                 context_from_other_agents = self.shared_context.get_latest_context()
@@ -457,11 +341,9 @@ Remember: Be respectful, efficient, and accurate. Web automation is powerful - u
             if context_from_other_agents and self.verbose:
                 print(f"[BROWSER AGENT] Found context from other agents")
 
-            # Start chat with instruction
             chat = self.model.start_chat(enable_automatic_function_calling=False)
             response = await chat.send_message_async(resolved_instruction)
 
-            # Handle function calling loop with retry logic
             max_iterations = 20
             iteration = 0
 
@@ -475,7 +357,6 @@ Remember: Be respectful, efficient, and accurate. Web automation is powerful - u
                 if not has_function_call:
                     break
 
-                # Extract function call
                 function_call = next(
                     (part.function_call for part in parts
                      if hasattr(part, 'function_call') and part.function_call),
@@ -488,14 +369,11 @@ Remember: Be respectful, efficient, and accurate. Web automation is powerful - u
                 tool_name = function_call.name
                 tool_args = self._deep_convert_proto_args(function_call.args)
 
-                # Execute tool with retry logic (Feature #8)
                 result = await self._execute_tool_with_retry(tool_name, tool_args, chat)
 
                 if isinstance(result, dict) and result.get('isError'):
-                    # Error occurred, send error response
                     response = result['response']
                 else:
-                    # Success, send result
                     response = result
 
                 iteration += 1
@@ -503,13 +381,11 @@ Remember: Be respectful, efficient, and accurate. Web automation is powerful - u
             if iteration >= max_iterations:
                 return "⚠️ Maximum browser operation iterations reached. Task may be too complex."
 
-            # Extract final text response
             final_response = safe_extract_response_text(response) if hasattr(response, 'text') else str(response)
 
             if self.verbose:
                 print(f"\n[BROWSER AGENT] Execution complete. {self.stats.get_summary()}")
 
-            # Remember resources and add proactive suggestions
             self._remember_created_resources(final_response, instruction)
 
             operation_type = self._infer_operation_type(instruction)
@@ -525,7 +401,6 @@ Remember: Be respectful, efficient, and accurate. Web automation is powerful - u
             return self._format_error(e)
 
     def _resolve_references(self, instruction: str) -> str:
-        """Resolve ambiguous references like 'it', 'that', 'this' using conversation memory"""
         ambiguous_terms = ['it', 'that', 'this', 'the page', 'the site', 'the url']
 
         instruction_lower = instruction.lower()
@@ -540,13 +415,10 @@ Remember: Be respectful, efficient, and accurate. Web automation is powerful - u
         return instruction
 
     def _remember_created_resources(self, response: str, instruction: str):
-        """Remember URLs and pages for future reference"""
-        # Extract URLs from response
         import re
         urls = re.findall(r'https?://[^\s]+', response)
 
         if urls:
-            # Remember the most recent URL
             resource_id = urls[0]
             operation_type = self._infer_operation_type(instruction)
 
@@ -556,7 +428,6 @@ Remember: Be respectful, efficient, and accurate. Web automation is powerful - u
                 {'url': resource_id, 'instruction': instruction}
             )
 
-            # Share with other agents
             if self.shared_context:
                 self.shared_context.share_resource(
                     'browser',
@@ -566,7 +437,6 @@ Remember: Be respectful, efficient, and accurate. Web automation is powerful - u
                 )
 
     def _infer_operation_type(self, instruction: str) -> str:
-        """Infer the type of browser operation from instruction"""
         instruction_lower = instruction.lower()
 
         if 'navigate' in instruction_lower or 'go to' in instruction_lower or 'visit' in instruction_lower:
@@ -583,19 +453,6 @@ Remember: Be respectful, efficient, and accurate. Web automation is powerful - u
             return 'general'
 
     async def _execute_tool_with_retry(self, tool_name: str, tool_args: Dict, chat: Any, retry_count: int = 0) -> Any:
-        """
-        Execute MCP tool with intelligent retry logic (Feature #8)
-
-        Args:
-            tool_name: Name of the tool to execute
-            tool_args: Tool arguments
-            chat: Active chat session
-            retry_count: Current retry attempt number
-
-        Returns:
-            Response from tool execution or error dict
-                    session_logger: Optional session logger for tracking operations
-        """
         try:
             if self.verbose or retry_count > 0:
                 retry_info = f" (retry {retry_count}/{RetryConfig.MAX_RETRIES})" if retry_count > 0 else ""
@@ -603,10 +460,8 @@ Remember: Be respectful, efficient, and accurate. Web automation is powerful - u
                 if self.verbose:
                     print(f"[BROWSER AGENT] Arguments: {json.dumps(tool_args, indent=2)[:500]}")
 
-            # Call MCP tool
             result = await self.session.call_tool(tool_name, arguments=tool_args)
 
-            # Extract result text
             result_text = ""
             if hasattr(result, 'content'):
                 for item in result.content:
@@ -618,7 +473,6 @@ Remember: Be respectful, efficient, and accurate. Web automation is powerful - u
 
             self.stats.record_success()
 
-            # Send result back to model
             return await chat.send_message_async(
                 genai.protos.Content(
                     parts=[genai.protos.Part(
@@ -636,7 +490,6 @@ Remember: Be respectful, efficient, and accurate. Web automation is powerful - u
             if self.verbose or retry_count > 0:
                 print(f"[BROWSER AGENT] Error calling {tool_name}: {str(e)}")
 
-            # Retry logic (Feature #8)
             if retry_count < RetryConfig.MAX_RETRIES:
                 self.stats.record_retry()
                 delay = min(RetryConfig.BASE_DELAY * (RetryConfig.EXPONENTIAL_BASE ** retry_count), RetryConfig.MAX_DELAY)
@@ -647,7 +500,6 @@ Remember: Be respectful, efficient, and accurate. Web automation is powerful - u
                 await asyncio.sleep(delay)
                 return await self._execute_tool_with_retry(tool_name, tool_args, chat, retry_count + 1)
 
-            # Max retries reached, return error
             error_message = self._format_browser_error(str(e), tool_name)
 
             return {
@@ -665,7 +517,6 @@ Remember: Be respectful, efficient, and accurate. Web automation is powerful - u
             }
 
     def _format_browser_error(self, error: str, tool_name: str) -> str:
-        """Format browser-specific errors with helpful context"""
         error_lower = error.lower()
 
         if "timeout" in error_lower:
@@ -678,16 +529,6 @@ Remember: Be respectful, efficient, and accurate. Web automation is powerful - u
             return f"⚠️ Browser error on {tool_name}: {error}"
 
     async def validate_operation(self, instruction: str) -> Dict[str, Any]:
-        """
-        Validate if a browser operation can be performed (Feature #14)
-
-        Args:
-            instruction: User instruction to validate
-
-        Returns:
-            Dict with validation results
-                    session_logger: Optional session logger for tracking operations
-        """
         result = {
             'valid': True,
             'missing': [],
@@ -697,12 +538,10 @@ Remember: Be respectful, efficient, and accurate. Web automation is powerful - u
 
         instruction_lower = instruction.lower()
 
-        # Check if URL is needed but not provided
         if any(word in instruction_lower for word in ['navigate', 'go to', 'visit', 'open']) and 'http' not in instruction_lower:
             result['warnings'].append("No URL provided - may need clarification")
             result['confidence'] = 0.7
 
-        # Check if selector might be needed
         if any(word in instruction_lower for word in ['click', 'fill', 'extract']) and 'on' not in instruction_lower:
             result['warnings'].append("No element selector specified - may need discovery")
             result['confidence'] = 0.6
@@ -710,7 +549,6 @@ Remember: Be respectful, efficient, and accurate. Web automation is powerful - u
         return result
 
     async def cleanup(self):
-        """Cleanup browser agent resources"""
         try:
             if self.verbose:
                 print(f"\n[BROWSER AGENT] Cleaning up. {self.stats.get_summary()}")
@@ -730,10 +568,7 @@ Remember: Be respectful, efficient, and accurate. Web automation is powerful - u
 
         self.initialized = False
 
-    # Helper methods for Gemini integration
-
     def _build_function_declaration(self, tool: Any) -> protos.FunctionDeclaration:
-        """Convert MCP tool schema to Gemini function declaration"""
         parameters_schema = protos.Schema(type_=protos.Type.OBJECT)
 
         if hasattr(tool, 'inputSchema'):
@@ -751,7 +586,6 @@ Remember: Be respectful, efficient, and accurate. Web automation is powerful - u
         )
 
     def _clean_schema(self, schema: Dict) -> protos.Schema:
-        """Convert JSON schema to protobuf schema recursively"""
         schema_pb = protos.Schema()
 
         if "type" in schema:
@@ -776,7 +610,6 @@ Remember: Be respectful, efficient, and accurate. Web automation is powerful - u
         return schema_pb
 
     def _deep_convert_proto_args(self, value: Any) -> Any:
-        """Recursively convert protobuf types to standard Python types"""
         type_str = str(type(value))
 
         if "MapComposite" in type_str:
@@ -787,5 +620,4 @@ Remember: Be respectful, efficient, and accurate. Web automation is powerful - u
             return value
 
     def _format_error(self, error: Exception) -> str:
-        """Format error message for user consumption"""
         return f"⚠️ Browser agent error: {str(error)}"

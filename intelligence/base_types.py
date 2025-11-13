@@ -1,12 +1,4 @@
-"""
-Base Types for Intelligence System
-
-Defines core data structures used across all intelligence components.
-Enhanced with immutability, validation, and rich type support.
-
-Author: AI System
-Version: 3.0 - Major refactoring with enterprise-grade patterns
-"""
+"""Base Types for Intelligence System"""
 
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple, Union, Callable
@@ -17,12 +9,7 @@ import hashlib
 import json
 
 
-# ============================================================================
-# INTENT TYPES
-# ============================================================================
-
 class IntentType(Enum):
-    """Types of user intents"""
     CREATE = "create"
     READ = "read"
     UPDATE = "update"
@@ -36,9 +23,8 @@ class IntentType(Enum):
 
 @dataclass
 class Intent:
-    """Represents a user intent"""
     type: IntentType
-    confidence: float  # 0.0 to 1.0
+    confidence: float
     entities: List['Entity'] = field(default_factory=list)
     implicit_requirements: List[str] = field(default_factory=list)
     raw_indicators: List[str] = field(default_factory=list)
@@ -47,12 +33,7 @@ class Intent:
         return f"{self.type.value}({self.confidence:.2f})"
 
 
-# ============================================================================
-# ENTITY TYPES
-# ============================================================================
-
 class EntityType(Enum):
-    """Types of entities that can be extracted"""
     PROJECT = "project"
     PERSON = "person"
     TEAM = "team"
@@ -72,10 +53,9 @@ class EntityType(Enum):
 
 @dataclass
 class Entity:
-    """Represents an extracted entity"""
     type: EntityType
     value: str
-    confidence: float  # 0.0 to 1.0
+    confidence: float
     context: Optional[str] = None
     normalized_value: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
@@ -84,13 +64,8 @@ class Entity:
         return f"{self.type.value}:{self.value}({self.confidence:.2f})"
 
 
-# ============================================================================
-# TASK TYPES
-# ============================================================================
-
 @dataclass
 class Task:
-    """Represents a decomposed task"""
     id: str
     action: str
     agent: Optional[str] = None
@@ -99,8 +74,8 @@ class Task:
     dependencies: List[str] = field(default_factory=list)
     conditions: Optional[str] = None
     priority: int = 0
-    estimated_duration: float = 0.0  # seconds
-    estimated_cost: float = 0.0  # tokens or API cost
+    estimated_duration: float = 0.0
+    estimated_cost: float = 0.0
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     def __str__(self) -> str:
@@ -109,21 +84,16 @@ class Task:
 
 @dataclass
 class DependencyGraph:
-    """Represents task dependencies"""
     tasks: Dict[str, Task] = field(default_factory=dict)
-    edges: List[tuple] = field(default_factory=list)  # (from_id, to_id)
+    edges: List[tuple] = field(default_factory=list)
 
     def add_task(self, task: Task):
-        """Add a task to the graph"""
         self.tasks[task.id] = task
 
     def add_dependency(self, from_task_id: str, to_task_id: str):
-        """Add a dependency edge"""
         self.edges.append((from_task_id, to_task_id))
 
     def get_execution_order(self) -> List[Task]:
-        """Get tasks in topologically sorted order"""
-        # Simple topological sort
         in_degree = {task_id: 0 for task_id in self.tasks}
         for from_id, to_id in self.edges:
             in_degree[to_id] = in_degree.get(to_id, 0) + 1
@@ -135,7 +105,6 @@ class DependencyGraph:
             task_id = queue.pop(0)
             result.append(self.tasks[task_id])
 
-            # Reduce in-degree for dependent tasks
             for from_id, to_id in self.edges:
                 if from_id == task_id:
                     in_degree[to_id] -= 1
@@ -145,7 +114,6 @@ class DependencyGraph:
         return result
 
     def has_cycle(self) -> bool:
-        """Check if graph has cycles"""
         visited = set()
         rec_stack = set()
 
@@ -174,7 +142,6 @@ class DependencyGraph:
 
 @dataclass
 class ExecutionPlan:
-    """Complete execution plan"""
     tasks: List[Task] = field(default_factory=list)
     dependency_graph: Optional[DependencyGraph] = None
     estimated_duration: float = 0.0
@@ -184,29 +151,22 @@ class ExecutionPlan:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     def get_execution_order(self) -> List[Task]:
-        """Get tasks in optimal execution order"""
         if self.dependency_graph:
             return self.dependency_graph.get_execution_order()
         return self.tasks
 
 
-# ============================================================================
-# CONFIDENCE TYPES
-# ============================================================================
-
 class ConfidenceLevel(Enum):
-    """Confidence levels for decision making"""
-    VERY_HIGH = "very_high"  # > 0.9
-    HIGH = "high"            # > 0.8
-    MEDIUM = "medium"        # > 0.6
-    LOW = "low"              # > 0.4
-    VERY_LOW = "very_low"    # <= 0.4
+    VERY_HIGH = "very_high"
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+    VERY_LOW = "very_low"
 
 
 @dataclass
 class Confidence:
-    """Represents confidence in a decision"""
-    score: float  # 0.0 to 1.0
+    score: float
     level: ConfidenceLevel
     factors: Dict[str, float] = field(default_factory=dict)
     uncertainties: List[str] = field(default_factory=list)
@@ -214,7 +174,6 @@ class Confidence:
 
     @staticmethod
     def from_score(score: float, factors: Optional[Dict[str, float]] = None) -> 'Confidence':
-        """Create Confidence from score"""
         if score > 0.9:
             level = ConfidenceLevel.VERY_HIGH
         elif score > 0.8:
@@ -233,29 +192,21 @@ class Confidence:
         )
 
     def should_proceed(self) -> bool:
-        """Should proceed without asking questions?"""
         return self.score > 0.8
 
     def should_review(self) -> bool:
-        """Should review with user?"""
         return 0.4 < self.score <= 0.8
 
     def should_clarify(self) -> bool:
-        """Should ask clarifying questions?"""
         return self.score <= 0.4
 
     def __str__(self) -> str:
         return f"{self.level.value}({self.score:.2f})"
 
 
-# ============================================================================
-# CONTEXT TYPES
-# ============================================================================
-
 @dataclass
 class ConversationTurn:
-    """Represents a single conversation turn"""
-    role: str  # 'user' or 'assistant'
+    role: str
     message: str
     timestamp: datetime
     intents: List[Intent] = field(default_factory=list)
@@ -265,23 +216,20 @@ class ConversationTurn:
 
 @dataclass
 class TrackedEntity:
-    """Entity being tracked across conversation"""
     entity: Entity
     first_mentioned: datetime
     last_referenced: datetime
     mention_count: int = 0
     attributes: Dict[str, Any] = field(default_factory=dict)
-    relationships: List[tuple] = field(default_factory=list)  # (relation_type, other_entity_id)
+    relationships: List[tuple] = field(default_factory=list)
 
     def is_recent(self, max_age_seconds: float = 300) -> bool:
-        """Is this entity recently referenced?"""
         age = (datetime.now() - self.last_referenced).total_seconds()
         return age <= max_age_seconds
 
 
 @dataclass
 class Pattern:
-    """Learned pattern from operations"""
     pattern_type: str
     pattern_data: Dict[str, Any]
     confidence: float
@@ -292,7 +240,6 @@ class Pattern:
 
 @dataclass
 class ErrorPattern:
-    """Pattern of errors"""
     error_type: str
     context_pattern: Dict[str, Any]
     solutions: List[str]
@@ -300,15 +247,10 @@ class ErrorPattern:
     success_rate: float = 0.0
 
 
-# ============================================================================
-# AGENT SELECTION TYPES
-# ============================================================================
-
 @dataclass
 class AgentScore:
-    """Score for an agent's suitability for a task"""
     agent_name: str
-    total_score: float  # 0.0 to 1.0
+    total_score: float
     capability_match: float = 0.0
     health_score: float = 0.0
     context_relevance: float = 0.0
@@ -320,13 +262,8 @@ class AgentScore:
         return f"{self.agent_name}({self.total_score:.2f})"
 
 
-# ============================================================================
-# OPTIMIZATION TYPES
-# ============================================================================
-
 @dataclass
 class CostEstimate:
-    """Cost estimate for execution"""
     estimated_tokens: int
     estimated_api_calls: int
     estimated_duration_seconds: float
@@ -336,17 +273,12 @@ class CostEstimate:
 
 @dataclass
 class Optimization:
-    """Suggested optimization"""
     optimization_type: str
     description: str
-    estimated_savings: Dict[str, float]  # {'tokens': 100, 'time': 2.5, 'cost': 0.01}
+    estimated_savings: Dict[str, float]
     implementation: str
     confidence: float = 0.8
 
-
-# ============================================================================
-# SEMANTIC AND EMBEDDING TYPES
-# ============================================================================
 
 @dataclass
 class SemanticVector:
@@ -356,7 +288,6 @@ class SemanticVector:
     model: str = "default"
 
     def cosine_similarity(self, other: 'SemanticVector') -> float:
-        """Calculate cosine similarity with another vector"""
         if self.dimension != other.dimension:
             raise ValueError("Vectors must have same dimension")
 
@@ -372,19 +303,13 @@ class SemanticVector:
 
 @dataclass
 class SemanticMatch:
-    """Result of semantic similarity search"""
     item_id: str
     similarity_score: float
     item: Any
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
-# ============================================================================
-# PIPELINE AND PROCESSING TYPES
-# ============================================================================
-
 class ProcessingStage(Enum):
-    """Stages in intelligence processing pipeline"""
     PREPROCESSING = "preprocessing"
     INTENT_CLASSIFICATION = "intent_classification"
     ENTITY_EXTRACTION = "entity_extraction"
@@ -396,7 +321,6 @@ class ProcessingStage(Enum):
 
 @dataclass
 class ProcessingResult:
-    """Result from a processing stage"""
     stage: ProcessingStage
     success: bool
     data: Dict[str, Any]
@@ -422,23 +346,16 @@ class PipelineContext:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     def add_result(self, result: ProcessingResult):
-        """Add processing result"""
         self.processing_results.append(result)
 
     def get_stage_result(self, stage: ProcessingStage) -> Optional[ProcessingResult]:
-        """Get result from specific stage"""
         for result in reversed(self.processing_results):
             if result.stage == stage:
                 return result
         return None
 
 
-# ============================================================================
-# RELATIONSHIP AND GRAPH TYPES
-# ============================================================================
-
 class RelationType(Enum):
-    """Types of relationships between entities"""
     ASSIGNED_TO = "assigned_to"
     CREATED_BY = "created_by"
     DEPENDS_ON = "depends_on"
@@ -451,7 +368,6 @@ class RelationType(Enum):
 
 @dataclass
 class EntityRelationship:
-    """Relationship between two entities"""
     from_entity_id: str
     to_entity_id: str
     relation_type: RelationType
@@ -467,11 +383,9 @@ class EntityGraph:
     relationships: List[EntityRelationship] = field(default_factory=list)
 
     def add_entity(self, entity_id: str, entity: Entity):
-        """Add entity to graph"""
         self.entities[entity_id] = entity
 
     def add_relationship(self, relationship: EntityRelationship):
-        """Add relationship to graph"""
         self.relationships.append(relationship)
 
     def get_related_entities(
@@ -479,7 +393,6 @@ class EntityGraph:
         entity_id: str,
         relation_type: Optional[RelationType] = None
     ) -> List[Tuple[RelationType, str, Entity]]:
-        """Get entities related to given entity"""
         related = []
         for rel in self.relationships:
             if rel.from_entity_id == entity_id:
@@ -493,13 +406,8 @@ class EntityGraph:
         return related
 
 
-# ============================================================================
-# CACHING TYPES
-# ============================================================================
-
 @dataclass
 class CacheEntry:
-    """Entry in cache"""
     key: str
     value: Any
     created_at: datetime
@@ -508,25 +416,18 @@ class CacheEntry:
     ttl_seconds: Optional[float] = None
 
     def is_expired(self) -> bool:
-        """Check if entry is expired"""
         if self.ttl_seconds is None:
             return False
         age = (datetime.now() - self.created_at).total_seconds()
         return age > self.ttl_seconds
 
     def touch(self):
-        """Update last accessed time"""
         self.last_accessed = datetime.now()
         self.access_count += 1
 
 
-# ============================================================================
-# METRICS AND MONITORING TYPES
-# ============================================================================
-
 @dataclass
 class MetricPoint:
-    """Single metric data point"""
     name: str
     value: float
     unit: str
@@ -536,7 +437,6 @@ class MetricPoint:
 
 @dataclass
 class PerformanceMetrics:
-    """Performance metrics for intelligence system"""
     total_latency_ms: float = 0.0
     intent_classification_ms: float = 0.0
     entity_extraction_ms: float = 0.0
@@ -549,7 +449,6 @@ class PerformanceMetrics:
     llm_tokens: int = 0
 
     def to_dict(self) -> Dict[str, float]:
-        """Convert to dictionary"""
         return {
             'total_latency_ms': self.total_latency_ms,
             'intent_classification_ms': self.intent_classification_ms,
@@ -565,7 +464,6 @@ class PerformanceMetrics:
 
 @dataclass
 class QualityMetrics:
-    """Quality metrics for intelligence outputs"""
     intent_accuracy: float = 0.0
     entity_precision: float = 0.0
     entity_recall: float = 0.0
@@ -574,7 +472,6 @@ class QualityMetrics:
     task_success_rate: float = 0.0
 
     def to_dict(self) -> Dict[str, float]:
-        """Convert to dictionary"""
         return {
             'intent_accuracy': self.intent_accuracy,
             'entity_precision': self.entity_precision,
@@ -585,14 +482,10 @@ class QualityMetrics:
         }
 
 
-# ============================================================================
-# LEARNING AND ADAPTATION TYPES
-# ============================================================================
-
 @dataclass
 class FeedbackSignal:
     """User feedback signal for learning"""
-    signal_type: str  # 'positive', 'negative', 'correction'
+    signal_type: str
     context: PipelineContext
     correction_data: Optional[Dict[str, Any]] = None
     timestamp: datetime = field(default_factory=datetime.now)
@@ -602,63 +495,47 @@ class FeedbackSignal:
 @dataclass
 class LearningUpdate:
     """Update to be applied to learning systems"""
-    component: str  # 'intent_classifier', 'entity_extractor', etc.
-    update_type: str  # 'pattern', 'weight', 'example'
+    component: str
+    update_type: str
     update_data: Dict[str, Any]
     confidence: float
-    source: str  # 'user_feedback', 'automatic', 'admin'
+    source: str
     timestamp: datetime = field(default_factory=datetime.now)
 
-
-# ============================================================================
-# ABSTRACT BASE CLASSES FOR COMPONENTS
-# ============================================================================
 
 class IntelligenceComponent(ABC):
     """Abstract base class for intelligence components"""
 
     @abstractmethod
     def process(self, context: PipelineContext) -> ProcessingResult:
-        """Process pipeline context and return result"""
         pass
 
     @abstractmethod
     def get_metrics(self) -> Dict[str, Any]:
-        """Get component metrics"""
         pass
 
     @abstractmethod
     def reset_metrics(self):
-        """Reset component metrics"""
         pass
 
 
-# ============================================================================
-# UTILITY TYPES
-# ============================================================================
-
 @dataclass
 class ValidationResult:
-    """Result of validation"""
     valid: bool
     errors: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
 
     def add_error(self, error: str):
-        """Add validation error"""
         self.valid = False
         self.errors.append(error)
 
     def add_warning(self, warning: str):
-        """Add validation warning"""
         self.warnings.append(warning)
 
 
 def create_entity_id(entity: Entity) -> str:
-    """Create unique ID for entity"""
     return f"{entity.type.value}:{entity.value}"
 
 
 def hash_content(content: str) -> str:
-    """Create hash of content for caching"""
     return hashlib.sha256(content.encode()).hexdigest()[:16]

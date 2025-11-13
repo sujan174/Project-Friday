@@ -1,24 +1,3 @@
-"""
-Intelligence Pipeline Logger
-
-Specialized logging for the intelligence system pipeline.
-Tracks each stage of intelligence processing with detailed insights.
-
-Features:
-- Pipeline stage tracking
-- Intent classification logging
-- Entity extraction logging
-- Context resolution logging
-- Task decomposition logging
-- Confidence scoring logging
-- Decision making logging
-- Performance metrics per stage
-- Quality metrics
-
-Author: AI System
-Version: 1.0
-"""
-
 import time
 import json
 from typing import Dict, List, Optional, Any
@@ -31,12 +10,7 @@ from .distributed_tracing import get_global_tracer, traced_span, SpanKind, SpanS
 from .logging_config import get_logger
 
 
-# ============================================================================
-# INTELLIGENCE EVENTS
-# ============================================================================
-
 class IntelligenceStage(Enum):
-    """Intelligence processing stages"""
     PREPROCESSING = "PREPROCESSING"
     INTENT_CLASSIFICATION = "INTENT_CLASSIFICATION"
     ENTITY_EXTRACTION = "ENTITY_EXTRACTION"
@@ -47,21 +21,15 @@ class IntelligenceStage(Enum):
 
 
 class DecisionType(Enum):
-    """Types of decisions the system can make"""
-    PROCEED = "PROCEED"              # Proceed with high confidence
-    CONFIRM = "CONFIRM"              # Confirm with user
-    CLARIFY = "CLARIFY"              # Ask for clarification
-    REJECT = "REJECT"                # Reject (invalid/unsafe)
-    DELEGATE = "DELEGATE"            # Delegate to specific agent
+    PROCEED = "PROCEED"
+    CONFIRM = "CONFIRM"
+    CLARIFY = "CLARIFY"
+    REJECT = "REJECT"
+    DELEGATE = "DELEGATE"
 
-
-# ============================================================================
-# DATA MODELS
-# ============================================================================
 
 @dataclass
 class StageResult:
-    """Result from a pipeline stage"""
     stage: IntelligenceStage
     success: bool
     duration_ms: float
@@ -72,7 +40,6 @@ class StageResult:
     warnings: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary"""
         return {
             'stage': self.stage.value,
             'success': self.success,
@@ -88,21 +55,19 @@ class StageResult:
 
 @dataclass
 class IntentClassificationResult:
-    """Intent classification result"""
     timestamp: float
     message: str
     detected_intents: List[str]
     confidence_scores: Dict[str, float]
-    classification_method: str  # "keyword" or "llm"
+    classification_method: str
     duration_ms: float
     cache_hit: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary"""
         return {
             'timestamp': self.timestamp,
             'timestamp_iso': datetime.fromtimestamp(self.timestamp).isoformat(),
-            'user_message': self.message,  # Renamed to avoid conflict with logging's 'message' field
+            'user_message': self.message,
             'detected_intents': self.detected_intents,
             'confidence_scores': self.confidence_scores,
             'classification_method': self.classification_method,
@@ -113,7 +78,6 @@ class IntentClassificationResult:
 
 @dataclass
 class EntityExtractionResult:
-    """Entity extraction result"""
     timestamp: float
     message: str
     extracted_entities: Dict[str, List[str]]
@@ -123,11 +87,10 @@ class EntityExtractionResult:
     cache_hit: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary"""
         return {
             'timestamp': self.timestamp,
             'timestamp_iso': datetime.fromtimestamp(self.timestamp).isoformat(),
-            'user_message': self.message,  # Renamed to avoid conflict with logging's 'message' field
+            'user_message': self.message,
             'extracted_entities': self.extracted_entities,
             'entity_relationships': self.entity_relationships,
             'confidence': self.confidence,
@@ -138,16 +101,14 @@ class EntityExtractionResult:
 
 @dataclass
 class TaskDecompositionResult:
-    """Task decomposition result"""
     timestamp: float
     tasks: List[Dict[str, Any]]
     dependency_graph: Dict[str, List[str]]
-    execution_plan: str  # "sequential" or "parallel"
+    execution_plan: str
     confidence: float
     duration_ms: float
 
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary"""
         return {
             'timestamp': self.timestamp,
             'timestamp_iso': datetime.fromtimestamp(self.timestamp).isoformat(),
@@ -161,7 +122,6 @@ class TaskDecompositionResult:
 
 @dataclass
 class DecisionRecord:
-    """Record of a decision made by the intelligence system"""
     timestamp: float
     decision_type: DecisionType
     confidence: float
@@ -170,7 +130,6 @@ class DecisionRecord:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary"""
         return {
             'timestamp': self.timestamp,
             'timestamp_iso': datetime.fromtimestamp(self.timestamp).isoformat(),
@@ -182,86 +141,39 @@ class DecisionRecord:
         }
 
 
-# ============================================================================
-# INTELLIGENCE LOGGER
-# ============================================================================
-
 class IntelligenceLogger:
-    """
-    Specialized logger for intelligence pipeline
-
-    Tracks:
-    - Each pipeline stage execution
-    - Intent classification results
-    - Entity extraction results
-    - Context resolution
-    - Task decomposition
-    - Confidence scores
-    - Decision making
-    - Performance metrics
-    - Quality metrics
-    """
-
     def __init__(
         self,
         session_id: str,
         export_dir: Optional[str] = "logs/intelligence",
         verbose: bool = False
     ):
-        """
-        Initialize intelligence logger
-
-        Args:
-            session_id: Session ID
-            export_dir: Directory for exports
-            verbose: Enable verbose logging
-        """
         self.session_id = session_id
         self.export_dir = Path(export_dir) if export_dir else None
         self.verbose = verbose
 
-        # Get standard logger
         self.logger = get_logger(__name__)
-
-        # Get tracer
         self.tracer = get_global_tracer()
 
-        # Create export directory
         if self.export_dir:
             self.export_dir.mkdir(parents=True, exist_ok=True)
 
-        # Processing records
         self.stage_results: List[StageResult] = []
         self.intent_classifications: List[IntentClassificationResult] = []
         self.entity_extractions: List[EntityExtractionResult] = []
         self.task_decompositions: List[TaskDecompositionResult] = []
         self.decisions: List[DecisionRecord] = []
 
-        # Metrics
         self.start_time = time.time()
         self.total_messages_processed = 0
         self.cache_hits = 0
         self.cache_misses = 0
-
-    # ========================================================================
-    # PIPELINE STAGE LOGGING
-    # ========================================================================
 
     def log_stage_start(
         self,
         stage: IntelligenceStage,
         input_data: Optional[Dict[str, Any]] = None
     ) -> float:
-        """
-        Log start of a pipeline stage
-
-        Args:
-            stage: Pipeline stage
-            input_data: Input data for the stage
-
-        Returns:
-            Start timestamp
-        """
         with traced_span(
             f"intelligence.{stage.value.lower()}",
             kind=SpanKind.INTELLIGENCE
@@ -290,7 +202,6 @@ class IntelligenceLogger:
         errors: Optional[List[str]] = None,
         warnings: Optional[List[str]] = None
     ):
-        """Log completion of a pipeline stage"""
         duration_ms = (time.time() - start_time) * 1000
 
         result = StageResult(
@@ -330,10 +241,6 @@ class IntelligenceLogger:
                 extra=result.to_dict()
             )
 
-    # ========================================================================
-    # INTENT CLASSIFICATION
-    # ========================================================================
-
     def log_intent_classification(
         self,
         message: str,
@@ -343,7 +250,6 @@ class IntelligenceLogger:
         duration_ms: float,
         cache_hit: bool = False
     ):
-        """Log intent classification result"""
         result = IntentClassificationResult(
             timestamp=time.time(),
             message=message,
@@ -382,10 +288,6 @@ class IntelligenceLogger:
                 extra=result.to_dict()
             )
 
-    # ========================================================================
-    # ENTITY EXTRACTION
-    # ========================================================================
-
     def log_entity_extraction(
         self,
         message: str,
@@ -395,7 +297,6 @@ class IntelligenceLogger:
         duration_ms: float,
         cache_hit: bool = False
     ):
-        """Log entity extraction result"""
         result = EntityExtractionResult(
             timestamp=time.time(),
             message=message,
@@ -439,10 +340,6 @@ class IntelligenceLogger:
                 extra=result.to_dict()
             )
 
-    # ========================================================================
-    # TASK DECOMPOSITION
-    # ========================================================================
-
     def log_task_decomposition(
         self,
         tasks: List[Dict[str, Any]],
@@ -451,7 +348,6 @@ class IntelligenceLogger:
         confidence: float,
         duration_ms: float
     ):
-        """Log task decomposition result"""
         result = TaskDecompositionResult(
             timestamp=time.time(),
             tasks=tasks,
@@ -486,10 +382,6 @@ class IntelligenceLogger:
                 extra=result.to_dict()
             )
 
-    # ========================================================================
-    # CONTEXT RESOLUTION
-    # ========================================================================
-
     def log_context_resolution(
         self,
         references_resolved: int,
@@ -497,7 +389,6 @@ class IntelligenceLogger:
         duration_ms: float,
         details: Optional[Dict[str, Any]] = None
     ):
-        """Log context resolution"""
         with traced_span(
             "intelligence.context_resolution",
             kind=SpanKind.INTELLIGENCE
@@ -520,10 +411,6 @@ class IntelligenceLogger:
                 }
             )
 
-    # ========================================================================
-    # CONFIDENCE SCORING
-    # ========================================================================
-
     def log_confidence_score(
         self,
         overall_confidence: float,
@@ -531,7 +418,6 @@ class IntelligenceLogger:
         factors: Dict[str, Any],
         duration_ms: float
     ):
-        """Log confidence scoring result"""
         with traced_span(
             "intelligence.confidence_scoring",
             kind=SpanKind.INTELLIGENCE
@@ -557,10 +443,6 @@ class IntelligenceLogger:
                 }
             )
 
-    # ========================================================================
-    # DECISION MAKING
-    # ========================================================================
-
     def log_decision(
         self,
         decision_type: DecisionType,
@@ -569,7 +451,6 @@ class IntelligenceLogger:
         factors: Dict[str, Any],
         metadata: Optional[Dict[str, Any]] = None
     ):
-        """Log a decision made by the intelligence system"""
         decision = DecisionRecord(
             timestamp=time.time(),
             decision_type=decision_type,
@@ -602,12 +483,7 @@ class IntelligenceLogger:
                 extra=decision.to_dict()
             )
 
-    # ========================================================================
-    # MESSAGE PROCESSING
-    # ========================================================================
-
     def log_message_processing_start(self, message: str) -> float:
-        """Log start of message processing"""
         self.total_messages_processed += 1
 
         with traced_span(
@@ -620,7 +496,7 @@ class IntelligenceLogger:
 
             self.logger.info(
                 f"Processing message #{self.total_messages_processed}",
-                extra={'user_message': message[:100]}  # First 100 chars
+                extra={'user_message': message[:100]}
             )
 
         return time.time()
@@ -631,7 +507,6 @@ class IntelligenceLogger:
         success: bool,
         error: Optional[str] = None
     ):
-        """Log completion of message processing"""
         duration_ms = (time.time() - start_time) * 1000
 
         with traced_span(
@@ -661,12 +536,7 @@ class IntelligenceLogger:
                 }
             )
 
-    # ========================================================================
-    # EXPORT & METRICS
-    # ========================================================================
-
     def export_session_summary(self) -> Dict[str, Any]:
-        """Export intelligence session summary"""
         summary = {
             'session_id': self.session_id,
             'start_time': self.start_time,
@@ -686,7 +556,6 @@ class IntelligenceLogger:
             'statistics': self._calculate_statistics()
         }
 
-        # Export to file
         if self.export_dir:
             filename = f"intelligence_{self.session_id}_{int(self.start_time)}.json"
             filepath = self.export_dir / filename
@@ -700,7 +569,6 @@ class IntelligenceLogger:
         return summary
 
     def _calculate_statistics(self) -> Dict[str, Any]:
-        """Calculate intelligence statistics"""
         stage_durations = {}
         for result in self.stage_results:
             stage = result.stage.value

@@ -1,24 +1,4 @@
-"""
-Intelligence Pipeline - Unified Processing Module
-
-This module consolidates the core intelligence pipeline:
-- Intent Classification: Understanding what users want
-- Entity Extraction: Extracting structured information
-- Task Decomposition: Breaking requests into execution plans
-- Confidence Scoring: Probabilistic confidence estimation
-
-All pipeline components work together to transform natural language
-into actionable execution plans with confidence metrics.
-
-Merged from:
-- intent_classifier.py
-- entity_extractor.py
-- task_decomposer.py
-- confidence_scorer.py
-
-Author: AI System
-Version: 4.0 - Consolidated pipeline
-"""
+# Intelligence Pipeline - Unified Processing Module
 
 import re
 import math
@@ -33,41 +13,18 @@ from .base_types import (
 from .system import get_global_cache, CacheKeyBuilder
 
 
-# ============================================================================
-# INTENT CLASSIFICATION
-# ============================================================================
-
 class IntentClassifier:
-    """
-    Classify user intents from natural language
-
-    Understands:
-    - Primary intent (CREATE, READ, UPDATE, DELETE, ANALYZE, COORDINATE)
-    - Multiple intents in one request
-    - Implicit requirements
-    - Contextual indicators
-    """
 
     def __init__(self, llm_client: Optional[Any] = None, use_llm: bool = False, verbose: bool = False):
-        """
-        Initialize intent classifier
-
-        Args:
-            llm_client: Optional LLM client for semantic understanding
-            use_llm: Whether to use LLM for disambiguation (slower but more accurate)
-            verbose: Enable verbose logging
-        """
         self.llm_client = llm_client
         self.use_llm = use_llm
         self.verbose = verbose
         self.cache = get_global_cache()
 
-        # Metrics
         self.keyword_classifications = 0
         self.llm_classifications = 0
         self.cache_hits = 0
 
-        # Intent keyword mappings (hierarchical)
         self.intent_keywords = {
             IntentType.CREATE: {
                 'primary': ['create', 'make', 'add', 'new', 'start', 'open', 'initialize', 'build', 'generate'],
@@ -111,7 +68,6 @@ class IntentClassifier:
             }
         }
 
-        # Implicit requirement patterns
         self.implicit_patterns = {
             'urgency': {
                 'critical': ['urgent', 'critical', 'asap', 'immediately', 'emergency', 'blocker'],
@@ -130,23 +86,13 @@ class IntentClassifier:
         }
 
     def classify(self, message: str) -> List[Intent]:
-        """
-        Classify intents in user message
-
-        Args:
-            message: User message to classify
-
-        Returns:
-            List of detected intents with confidence scores
-        """
         message_lower = message.lower()
         detected_intents = []
 
-        # Check each intent type
         for intent_type, keywords in self.intent_keywords.items():
             confidence = self._calculate_intent_confidence(message_lower, keywords)
 
-            if confidence > 0.3:  # Threshold for detection
+            if confidence > 0.3:
                 intent = Intent(
                     type=intent_type,
                     confidence=confidence,
@@ -154,15 +100,12 @@ class IntentClassifier:
                 )
                 detected_intents.append(intent)
 
-        # Sort by confidence
         detected_intents.sort(key=lambda x: x.confidence, reverse=True)
 
-        # Detect implicit requirements
         implicit_reqs = self._detect_implicit_requirements(message_lower)
         for intent in detected_intents:
             intent.implicit_requirements = implicit_reqs
 
-        # If no intents detected, mark as unknown
         if not detected_intents:
             detected_intents.append(Intent(
                 type=IntentType.UNKNOWN,
@@ -178,18 +121,14 @@ class IntentClassifier:
         return detected_intents
 
     def get_primary_intent(self, intents: List[Intent]) -> Intent:
-        """Get the primary (highest confidence) intent"""
         return intents[0] if intents else Intent(type=IntentType.UNKNOWN, confidence=0.0)
 
     def has_intent_type(self, intents: List[Intent], intent_type: IntentType) -> bool:
-        """Check if specific intent type is present"""
         return any(i.type == intent_type for i in intents)
 
     def _calculate_intent_confidence(self, message: str, keywords: Dict[str, List[str]]) -> float:
-        """Calculate confidence score for an intent"""
         score = 0.0
 
-        # Check primary keywords (weight: 1.0)
         for keyword in keywords.get('primary', []):
             if keyword in message:
                 position = message.find(keyword)
@@ -197,13 +136,11 @@ class IntentClassifier:
                 score = max(score, 0.9 * position_factor)
                 break
 
-        # Check secondary keywords (weight: 0.7)
         for keyword in keywords.get('secondary', []):
             if keyword in message:
                 score = max(score, 0.7)
                 break
 
-        # Boost if modifiers present
         modifiers_found = sum(1 for mod in keywords.get('modifiers', []) if mod in message)
         if modifiers_found > 0:
             score = min(score + (modifiers_found * 0.1), 1.0)
@@ -211,7 +148,6 @@ class IntentClassifier:
         return score
 
     def _extract_indicators(self, message: str, keywords: Dict[str, List[str]]) -> List[str]:
-        """Extract words that indicated this intent"""
         indicators = []
         for keyword in keywords.get('primary', []) + keywords.get('secondary', []):
             if keyword in message:
@@ -219,10 +155,8 @@ class IntentClassifier:
         return indicators
 
     def _detect_implicit_requirements(self, message: str) -> List[str]:
-        """Detect implicit requirements from message"""
         requirements = []
 
-        # Urgency detection
         for level, keywords in self.implicit_patterns['urgency'].items():
             for keyword in keywords:
                 if keyword in message:
@@ -233,7 +167,6 @@ class IntentClassifier:
                         requirements.append('priority:high')
                     break
 
-        # Scope detection
         for scope, keywords in self.implicit_patterns['scope'].items():
             for keyword in keywords:
                 if keyword in message:
@@ -242,19 +175,16 @@ class IntentClassifier:
                         requirements.append('batch_operation:true')
                     break
 
-        # Visibility detection
         for visibility, keywords in self.implicit_patterns['visibility'].items():
             for keyword in keywords:
                 if keyword in message:
                     requirements.append(f'visibility:{visibility}')
                     break
 
-        # Security-related detection
         security_keywords = ['security', 'secure', 'auth', 'authentication', 'authorization', 'permission']
         if any(kw in message for kw in security_keywords):
             requirements.append('security_sensitive:true')
 
-        # Performance-related detection
         performance_keywords = ['performance', 'slow', 'fast', 'optimize', 'speed']
         if any(kw in message for kw in performance_keywords):
             requirements.append('performance_related:true')
@@ -262,38 +192,29 @@ class IntentClassifier:
         return requirements
 
     def is_multi_intent(self, intents: List[Intent]) -> bool:
-        """Check if message contains multiple high-confidence intents"""
         high_confidence_intents = [i for i in intents if i.confidence > 0.6]
         return len(high_confidence_intents) > 1
 
     def suggest_clarifications(self, intents: List[Intent]) -> List[str]:
-        """Suggest what clarifications might be needed based on intents"""
         clarifications = []
         primary = self.get_primary_intent(intents)
 
-        # CREATE intent clarifications
         if primary.type == IntentType.CREATE:
             clarifications.extend([
                 "What should be created? (issue, PR, page, etc.)",
                 "Which project/repository?",
                 "Any specific details or description?"
             ])
-
-        # READ intent clarifications
         elif primary.type == IntentType.READ:
             clarifications.extend([
                 "What information are you looking for?",
                 "Which project/repository?"
             ])
-
-        # UPDATE intent clarifications
         elif primary.type == IntentType.UPDATE:
             clarifications.extend([
                 "Which resource to update?",
                 "What changes should be made?"
             ])
-
-        # COORDINATE intent clarifications
         elif primary.type == IntentType.COORDINATE:
             clarifications.extend([
                 "Who should be notified?",
@@ -303,7 +224,6 @@ class IntentClassifier:
         return clarifications
 
     def extract_action_target(self, message: str) -> Optional[str]:
-        """Extract the target of an action from message"""
         message_lower = message.lower()
         targets = [
             'issue', 'ticket', 'pr', 'pull request', 'page', 'task',
@@ -318,7 +238,6 @@ class IntentClassifier:
         return None
 
     def detect_conditional_logic(self, message: str) -> bool:
-        """Detect if message contains conditional/workflow logic"""
         message_lower = message.lower()
         conditional_patterns = [
             r'\bwhen\b.*\b(then|do|notify|create)',
@@ -328,10 +247,8 @@ class IntentClassifier:
         return any(re.search(pattern, message_lower) for pattern in conditional_patterns)
 
     def classify_with_cache(self, message: str) -> List[Intent]:
-        """Classify with caching support"""
         cache_key = CacheKeyBuilder.for_intent_classification(message)
 
-        # Try cache first
         cached_result = self.cache.get(cache_key)
         if cached_result is not None:
             self.cache_hits += 1
@@ -339,16 +256,12 @@ class IntentClassifier:
                 print(f"[INTENT] Cache hit for message")
             return cached_result
 
-        # Classify
         intents = self.classify(message)
-
-        # Cache result
-        self.cache.set(cache_key, intents, ttl_seconds=300)  # 5 minute TTL
+        self.cache.set(cache_key, intents, ttl_seconds=300)
 
         return intents
 
     def classify_with_llm(self, message: str, context: Optional[Dict] = None) -> List[Intent]:
-        """Classify intents using LLM for better semantic understanding"""
         if not self.llm_client:
             if self.verbose:
                 print("[INTENT] No LLM client available, falling back to keywords")
@@ -356,11 +269,9 @@ class IntentClassifier:
 
         self.llm_classifications += 1
 
-        # Build prompt for LLM
         prompt = self._build_intent_classification_prompt(message, context)
 
         try:
-            # Call LLM
             response = self._call_llm_for_intent(prompt)
             intents = self._parse_llm_intent_response(response)
 
@@ -375,7 +286,6 @@ class IntentClassifier:
             return self.classify(message)
 
     def classify_hybrid(self, message: str, context: Optional[Dict] = None) -> List[Intent]:
-        """Hybrid classification: keywords first, LLM for disambiguation"""
         keyword_intents = self.classify(message)
         needs_disambiguation = self._needs_disambiguation(keyword_intents, message)
 
@@ -391,7 +301,6 @@ class IntentClassifier:
         return merged_intents
 
     def _needs_disambiguation(self, intents: List[Intent], message: str) -> bool:
-        """Determine if intents need LLM disambiguation"""
         if not intents:
             return True
 
@@ -420,7 +329,6 @@ class IntentClassifier:
         keyword_intents: List[Intent],
         llm_intents: List[Intent]
     ) -> List[Intent]:
-        """Merge keyword and LLM intent results"""
         merged = list(llm_intents)
         llm_intent_types = {i.type for i in llm_intents}
 
@@ -436,7 +344,6 @@ class IntentClassifier:
         message: str,
         context: Optional[Dict] = None
     ) -> str:
-        """Build prompt for LLM intent classification"""
         return f"""Classify the user's intent(s) from this message.
 
 Message: "{message}"
@@ -463,11 +370,9 @@ Format response as JSON array:
 Response:"""
 
     def _call_llm_for_intent(self, prompt: str) -> str:
-        """Call LLM for intent classification"""
         raise NotImplementedError("LLM client integration not implemented")
 
     def _parse_llm_intent_response(self, response: str) -> List[Intent]:
-        """Parse LLM response into Intent objects"""
         import json
 
         try:
@@ -498,20 +403,16 @@ Response:"""
             return []
 
     def calibrate_confidence(self, intents: List[Intent], message: str) -> List[Intent]:
-        """Calibrate confidence scores based on additional factors"""
         for intent in intents:
             original_conf = intent.confidence
 
-            # Reduce confidence for very short messages
             if len(message.split()) < 3:
                 intent.confidence *= 0.9
 
-            # Reduce confidence for vague language
             vague_words = ['thing', 'stuff', 'something', 'anything']
             if any(word in message.lower() for word in vague_words):
                 intent.confidence *= 0.85
 
-            # Increase confidence for very specific language
             specific_indicators = ['#', '@', 'http', '://', '-']
             specificity = sum(1 for ind in specific_indicators if ind in message)
             if specificity >= 2:
@@ -525,7 +426,6 @@ Response:"""
         return intents
 
     def get_intent_hierarchy(self, intent_type: IntentType) -> List[IntentType]:
-        """Get intent hierarchy (parent-child relationships)"""
         hierarchies = {
             IntentType.CREATE: [IntentType.UPDATE, IntentType.COORDINATE],
             IntentType.ANALYZE: [IntentType.CREATE, IntentType.COORDINATE],
@@ -535,7 +435,6 @@ Response:"""
         return hierarchies.get(intent_type, [])
 
     def get_metrics(self) -> Dict[str, Any]:
-        """Get classification metrics"""
         return {
             'keyword_classifications': self.keyword_classifications,
             'llm_classifications': self.llm_classifications,
@@ -544,48 +443,22 @@ Response:"""
         }
 
     def reset_metrics(self):
-        """Reset metrics"""
         self.keyword_classifications = 0
         self.llm_classifications = 0
         self.cache_hits = 0
 
 
-# ============================================================================
-# ENTITY EXTRACTION
-# ============================================================================
-
 class EntityExtractor:
-    """
-    Extract entities from natural language
-
-    Recognizes:
-    - Projects: KAN, PROJ-*, repository names
-    - People: @username, @team, names
-    - Dates: tomorrow, next week, by Friday, 2024-01-15
-    - Priorities: critical, high, medium, low
-    - Resources: KAN-123, #456, PR #789
-    - Teams: @engineering, security team
-    - Channels: #general, #bugs
-    """
 
     def __init__(self, llm_client: Optional[any] = None, verbose: bool = False):
-        """
-        Initialize entity extractor
-
-        Args:
-            llm_client: Optional LLM client for advanced NER
-            verbose: Enable verbose logging
-        """
         self.llm_client = llm_client
         self.verbose = verbose
         self.cache = get_global_cache()
 
-        # Metrics
         self.extractions = 0
         self.entities_extracted = 0
         self.relationships_found = 0
 
-        # Regex patterns for entity extraction
         self.patterns = {
             EntityType.ISSUE: [
                 r'\b([A-Z]{2,10}-\d+)\b',
@@ -628,7 +501,6 @@ class EntityExtractor:
             ],
         }
 
-        # Priority keywords
         self.priority_keywords = {
             'critical': ['critical', 'blocker', 'urgent', 'emergency'],
             'high': ['high', 'important', 'priority', 'soon'],
@@ -636,7 +508,6 @@ class EntityExtractor:
             'low': ['low', 'minor', 'trivial', 'nice to have', 'nice-to-have']
         }
 
-        # Status keywords
         self.status_keywords = {
             'open': ['open', 'new', 'todo', 'backlog'],
             'in_progress': ['in progress', 'in-progress', 'working', 'started', 'active'],
@@ -645,7 +516,6 @@ class EntityExtractor:
             'blocked': ['blocked', 'waiting', 'on hold']
         }
 
-        # Date patterns
         self.date_patterns = {
             'tomorrow': lambda: datetime.now() + timedelta(days=1),
             'today': lambda: datetime.now(),
@@ -654,17 +524,14 @@ class EntityExtractor:
             'next month': lambda: datetime.now() + timedelta(days=30),
         }
 
-        # Weekdays
         self.weekdays = {
             'monday': 0, 'tuesday': 1, 'wednesday': 2,
             'thursday': 3, 'friday': 4, 'saturday': 5, 'sunday': 6
         }
 
     def extract(self, message: str, context: Optional[Dict] = None) -> List[Entity]:
-        """Extract all entities from message"""
         entities = []
 
-        # Extract pattern-based entities
         for entity_type, patterns in self.patterns.items():
             for pattern in patterns:
                 matches = re.finditer(pattern, message, re.IGNORECASE)
@@ -680,16 +547,13 @@ class EntityExtractor:
                         )
                         entities.append(entity)
 
-        # Extract keyword-based entities
         entities.extend(self._extract_priorities(message))
         entities.extend(self._extract_statuses(message))
         entities.extend(self._extract_dates(message))
         entities.extend(self._extract_labels(message))
 
-        # Deduplicate entities
         entities = self._deduplicate_entities(entities)
 
-        # Normalize entity values
         for entity in entities:
             entity.normalized_value = self._normalize_value(entity)
 
@@ -701,19 +565,16 @@ class EntityExtractor:
         return entities
 
     def extract_by_type(self, message: str, entity_type: EntityType) -> List[Entity]:
-        """Extract only entities of specific type"""
         all_entities = self.extract(message)
         return [e for e in all_entities if e.type == entity_type]
 
     def find_entity_value(self, entities: List[Entity], entity_type: EntityType) -> Optional[str]:
-        """Find first entity value of specific type"""
         for entity in entities:
             if entity.type == entity_type:
                 return entity.normalized_value or entity.value
         return None
 
     def _is_valid_entity(self, value: str, entity_type: EntityType) -> bool:
-        """Validate if extracted value is actually an entity"""
         if len(value) < 2:
             return False
 
@@ -729,7 +590,6 @@ class EntityExtractor:
         return True
 
     def _extract_priorities(self, message: str) -> List[Entity]:
-        """Extract priority entities"""
         message_lower = message.lower()
         entities = []
 
@@ -747,7 +607,6 @@ class EntityExtractor:
         return entities
 
     def _extract_statuses(self, message: str) -> List[Entity]:
-        """Extract status entities"""
         message_lower = message.lower()
         entities = []
 
@@ -765,11 +624,9 @@ class EntityExtractor:
         return entities
 
     def _extract_dates(self, message: str) -> List[Entity]:
-        """Extract date entities"""
         message_lower = message.lower()
         entities = []
 
-        # Relative dates
         for date_phrase, date_func in self.date_patterns.items():
             if date_phrase in message_lower:
                 date_value = date_func()
@@ -781,7 +638,6 @@ class EntityExtractor:
                     context=date_phrase
                 ))
 
-        # Weekdays
         for weekday, weekday_num in self.weekdays.items():
             pattern = r'\b(?:next|by|on)\s+' + weekday + r'\b'
             if re.search(pattern, message_lower):
@@ -799,10 +655,9 @@ class EntityExtractor:
                     context=f"next {weekday}"
                 ))
 
-        # Absolute dates
         date_patterns = [
-            r'\b(\d{4}-\d{2}-\d{2})\b',  # YYYY-MM-DD
-            r'\b(\d{2}/\d{2}/\d{4})\b',  # MM/DD/YYYY
+            r'\b(\d{4}-\d{2}-\d{2})\b',
+            r'\b(\d{2}/\d{2}/\d{4})\b',
         ]
         for pattern in date_patterns:
             matches = re.finditer(pattern, message)
@@ -818,7 +673,6 @@ class EntityExtractor:
         return entities
 
     def _extract_labels(self, message: str) -> List[Entity]:
-        """Extract label/tag entities"""
         pattern = r'#([a-z][\w-]{2,})'
         matches = re.finditer(pattern, message, re.IGNORECASE)
 
@@ -836,7 +690,6 @@ class EntityExtractor:
         return entities
 
     def _deduplicate_entities(self, entities: List[Entity]) -> List[Entity]:
-        """Remove duplicate entities"""
         seen = set()
         unique = []
 
@@ -849,7 +702,6 @@ class EntityExtractor:
         return unique
 
     def _normalize_value(self, entity: Entity) -> str:
-        """Normalize entity value for consistency"""
         if entity.type == EntityType.PRIORITY:
             return entity.value.lower()
         elif entity.type == EntityType.STATUS:
@@ -864,7 +716,6 @@ class EntityExtractor:
             return entity.value
 
     def group_by_type(self, entities: List[Entity]) -> Dict[EntityType, List[Entity]]:
-        """Group entities by type"""
         grouped = {}
         for entity in entities:
             if entity.type not in grouped:
@@ -873,11 +724,9 @@ class EntityExtractor:
         return grouped
 
     def has_entity_type(self, entities: List[Entity], entity_type: EntityType) -> bool:
-        """Check if specific entity type is present"""
         return any(e.type == entity_type for e in entities)
 
     def get_entity_summary(self, entities: List[Entity]) -> str:
-        """Get human-readable summary of extracted entities"""
         if not entities:
             return "No entities extracted"
 
@@ -895,17 +744,14 @@ class EntityExtractor:
         message: str,
         context: Optional[Dict] = None
     ) -> Tuple[List[Entity], EntityGraph]:
-        """Extract entities and their relationships"""
         entities = self.extract(message, context)
 
-        # Build entity graph
         graph = EntityGraph()
 
         for entity in entities:
             entity_id = create_entity_id(entity)
             graph.add_entity(entity_id, entity)
 
-        # Extract relationships
         relationships = self._extract_relationships(message, entities)
 
         for rel in relationships:
@@ -922,7 +768,6 @@ class EntityExtractor:
         message: str,
         entities: List[Entity]
     ) -> List[EntityRelationship]:
-        """Extract relationships between entities"""
         relationships = []
         message_lower = message.lower()
 
@@ -965,7 +810,6 @@ class EntityExtractor:
         entities: List[Entity],
         value: str
     ) -> Optional[Entity]:
-        """Find entity that matches value (fuzzy)"""
         value_lower = value.lower().strip('@#')
 
         for entity in entities:
@@ -980,7 +824,6 @@ class EntityExtractor:
         message: str,
         context: Optional[Dict] = None
     ) -> List[Entity]:
-        """Extract entities using NER (Named Entity Recognition)"""
         regex_entities = self.extract(message, context)
 
         if not self.llm_client:
@@ -1001,7 +844,6 @@ class EntityExtractor:
         message: str,
         context: Optional[Dict] = None
     ) -> List[Entity]:
-        """Extract entities using LLM"""
         raise NotImplementedError("LLM entity extraction not implemented")
 
     def _merge_entity_results(
@@ -1009,7 +851,6 @@ class EntityExtractor:
         regex_entities: List[Entity],
         llm_entities: List[Entity]
     ) -> List[Entity]:
-        """Merge regex and LLM entity results"""
         merged = list(llm_entities)
         llm_values = {e.value.lower() for e in llm_entities}
 
@@ -1026,7 +867,6 @@ class EntityExtractor:
         message: str,
         context: Optional[Dict] = None
     ) -> List[Entity]:
-        """Calibrate entity confidence scores"""
         for entity in entities:
             original_conf = entity.confidence
 
@@ -1055,7 +895,6 @@ class EntityExtractor:
         entities: List[Entity],
         context: Optional[Dict] = None
     ) -> List[Entity]:
-        """Resolve coreferences in message"""
         if not context:
             return entities
 
@@ -1099,7 +938,6 @@ class EntityExtractor:
         return entities
 
     def get_entity_graph_summary(self, graph: EntityGraph) -> str:
-        """Get human-readable summary of entity graph"""
         lines = []
         lines.append(f"Entity Graph:")
         lines.append(f"  Entities: {len(graph.entities)}")
@@ -1113,7 +951,6 @@ class EntityExtractor:
         return "\n".join(lines)
 
     def get_metrics(self) -> Dict:
-        """Get extraction metrics"""
         return {
             'extractions': self.extractions,
             'entities_extracted': self.entities_extracted,
@@ -1124,41 +961,18 @@ class EntityExtractor:
         }
 
     def reset_metrics(self):
-        """Reset metrics"""
         self.extractions = 0
         self.entities_extracted = 0
         self.relationships_found = 0
 
 
-# ============================================================================
-# TASK DECOMPOSITION
-# ============================================================================
-
 class TaskDecomposer:
-    """
-    Decompose complex requests into executable tasks
-
-    Capabilities:
-    - Break multi-intent requests into tasks
-    - Detect task dependencies
-    - Optimize execution order
-    - Identify parallelizable tasks
-    - Build execution plans with data flow
-    """
 
     def __init__(self, agent_capabilities: Optional[Dict[str, List[str]]] = None, verbose: bool = False):
-        """
-        Initialize task decomposer
-
-        Args:
-            agent_capabilities: Map of agent names to their capabilities
-            verbose: Enable verbose logging
-        """
         self.agent_capabilities = agent_capabilities or {}
         self.verbose = verbose
         self.task_counter = 0
 
-        # Intent-to-action mapping
         self.intent_actions = {
             IntentType.CREATE: ['create', 'build', 'generate'],
             IntentType.READ: ['get', 'fetch', 'list', 'search'],
@@ -1169,7 +983,6 @@ class TaskDecomposer:
             IntentType.SEARCH: ['search', 'find', 'query'],
         }
 
-        # Entity-to-agent mapping
         self.entity_agent_hints = {
             EntityType.ISSUE: ['jira', 'github'],
             EntityType.PR: ['github'],
@@ -1186,27 +999,19 @@ class TaskDecomposer:
         entities: List[Entity],
         context: Optional[Dict] = None
     ) -> ExecutionPlan:
-        """Decompose message into execution plan"""
         if not intents:
             return ExecutionPlan()
 
-        # Generate tasks from intents
         tasks = []
         for intent in intents:
             task = self._intent_to_task(intent, entities, message, context)
             if task:
                 tasks.append(task)
 
-        # Detect dependencies between tasks
         dependency_graph = self._build_dependency_graph(tasks, intents)
-
-        # Detect conditional tasks
         self._detect_conditional_tasks(tasks, message)
-
-        # Estimate costs
         self._estimate_costs(tasks)
 
-        # Build execution plan
         plan = ExecutionPlan(
             tasks=tasks,
             dependency_graph=dependency_graph,
@@ -1214,7 +1019,6 @@ class TaskDecomposer:
             estimated_cost=sum(t.estimated_cost for t in tasks)
         )
 
-        # Detect potential issues
         plan.risks = self._identify_risks(plan)
 
         if self.verbose:
@@ -1233,7 +1037,6 @@ class TaskDecomposer:
         message: str,
         context: Optional[Dict]
     ) -> Optional[Task]:
-        """Convert an intent to a task"""
         self.task_counter += 1
         task_id = f"task_{self.task_counter}"
 
@@ -1259,12 +1062,10 @@ class TaskDecomposer:
         return task
 
     def _get_action_for_intent(self, intent: Intent) -> str:
-        """Get action name for intent"""
         actions = self.intent_actions.get(intent.type, ['execute'])
         return actions[0]
 
     def _suggest_agent_for_intent(self, intent: Intent, entities: List[Entity]) -> Optional[str]:
-        """Suggest which agent should handle this task"""
         agent_scores = {}
 
         for entity in entities:
@@ -1272,7 +1073,6 @@ class TaskDecomposer:
             for agent in suggested_agents:
                 agent_scores[agent] = agent_scores.get(agent, 0) + entity.confidence
 
-        # Intent-specific suggestions
         if intent.type == IntentType.ANALYZE:
             if any(e.type == EntityType.CODE for e in entities):
                 agent_scores['code_reviewer'] = agent_scores.get('code_reviewer', 0) + 1.0
@@ -1287,7 +1087,6 @@ class TaskDecomposer:
         return None
 
     def _filter_entities_for_intent(self, intent: Intent, entities: List[Entity]) -> List[Entity]:
-        """Filter entities relevant to this specific intent"""
         return entities
 
     def _build_task_inputs(
@@ -1296,7 +1095,6 @@ class TaskDecomposer:
         entities: List[Entity],
         message: str
     ) -> Dict[str, any]:
-        """Build task inputs from intent and entities"""
         inputs = {
             'message': message,
             'intent_type': intent.type.value,
@@ -1321,7 +1119,6 @@ class TaskDecomposer:
         return inputs
 
     def _determine_task_outputs(self, intent: Intent, entities: List[Entity]) -> List[str]:
-        """Determine what outputs this task will produce"""
         outputs = []
 
         if intent.type == IntentType.CREATE:
@@ -1342,7 +1139,6 @@ class TaskDecomposer:
         return outputs
 
     def _build_dependency_graph(self, tasks: List[Task], intents: List[Intent]) -> DependencyGraph:
-        """Build dependency graph for tasks"""
         graph = DependencyGraph()
 
         for task in tasks:
@@ -1359,7 +1155,6 @@ class TaskDecomposer:
         return graph
 
     def _needs_output_from(self, dependent_task: Task, provider_task: Task) -> bool:
-        """Check if dependent_task needs outputs from provider_task"""
         for output in provider_task.outputs:
             for input_key in dependent_task.inputs.keys():
                 if output.replace('_', '') in input_key.replace('_', ''):
@@ -1382,7 +1177,6 @@ class TaskDecomposer:
         return False
 
     def _detect_conditional_tasks(self, tasks: List[Task], message: str):
-        """Detect if tasks are conditional"""
         message_lower = message.lower()
 
         if 'if' in message_lower or 'when' in message_lower:
@@ -1392,7 +1186,6 @@ class TaskDecomposer:
                     task.metadata['conditional'] = True
 
     def _estimate_costs(self, tasks: List[Task]):
-        """Estimate duration and cost for each task"""
         for task in tasks:
             if task.action == 'review' or task.action == 'analyze':
                 task.estimated_duration = 5.0
@@ -1411,7 +1204,6 @@ class TaskDecomposer:
                 task.estimated_cost = 100.0
 
     def _identify_risks(self, plan: ExecutionPlan) -> List[str]:
-        """Identify potential risks in execution plan"""
         risks = []
 
         if plan.dependency_graph and plan.dependency_graph.has_cycle():
@@ -1433,7 +1225,6 @@ class TaskDecomposer:
         return risks
 
     def get_parallel_tasks(self, plan: ExecutionPlan) -> List[List[Task]]:
-        """Get groups of tasks that can be executed in parallel"""
         if not plan.dependency_graph:
             return [[task] for task in plan.tasks]
 
@@ -1462,12 +1253,9 @@ class TaskDecomposer:
         return levels
 
     def optimize_plan(self, plan: ExecutionPlan) -> ExecutionPlan:
-        """Optimize execution plan"""
-        # TODO: Implement optimizations
         return plan
 
     def explain_plan(self, plan: ExecutionPlan) -> str:
-        """Generate human-readable explanation of execution plan"""
         lines = []
         lines.append(f"Execution Plan ({len(plan.tasks)} tasks):")
         lines.append("")
@@ -1495,26 +1283,11 @@ class TaskDecomposer:
         return "\n".join(lines)
 
 
-# ============================================================================
-# CONFIDENCE SCORING
-# ============================================================================
-
 class ConfidenceScorer:
-    """
-    Score confidence in understanding and decisions
-
-    Confidence factors:
-    - Intent clarity (how clear is what user wants)
-    - Entity completeness (do we have all needed info)
-    - Task decomposition quality
-    - Agent selection certainty
-    - Historical success patterns
-    """
 
     def __init__(self, verbose: bool = False):
         self.verbose = verbose
 
-        # Minimum required entities for each intent type
         self.required_entities = {
             'create': ['issue', 'pr', 'project', 'repository'],
             'update': ['issue', 'pr', 'resource'],
@@ -1529,7 +1302,6 @@ class ConfidenceScorer:
         entities: List[Entity],
         plan: Optional[ExecutionPlan] = None
     ) -> Confidence:
-        """Score overall confidence in understanding and plan"""
         factors = {}
 
         factors['intent_clarity'] = self._score_intent_clarity(message, intents)
@@ -1541,7 +1313,6 @@ class ConfidenceScorer:
         else:
             factors['plan_quality'] = 0.5
 
-        # Calculate weighted average
         weights = {
             'intent_clarity': 0.3,
             'entity_completeness': 0.3,
@@ -1551,10 +1322,7 @@ class ConfidenceScorer:
 
         total_score = sum(factors[k] * weights[k] for k in factors)
 
-        # Identify uncertainties
         uncertainties = self._identify_uncertainties(message, intents, entities, factors)
-
-        # Identify assumptions
         assumptions = self._identify_assumptions(message, intents, entities)
 
         confidence = Confidence.from_score(total_score, factors)
@@ -1572,7 +1340,6 @@ class ConfidenceScorer:
         return confidence
 
     def _score_intent_clarity(self, message: str, intents: List[Intent]) -> float:
-        """Score how clear the user's intent is"""
         if not intents:
             return 0.2
 
@@ -1590,7 +1357,6 @@ class ConfidenceScorer:
         return 0.6
 
     def _score_entity_completeness(self, intents: List[Intent], entities: List[Entity]) -> float:
-        """Score whether we have all needed entities for the intents"""
         if not intents:
             return 0.0
 
@@ -1617,14 +1383,12 @@ class ConfidenceScorer:
             return 0.3
 
     def _score_message_clarity(self, message: str) -> float:
-        """Score clarity of message itself"""
         message_lower = message.lower()
         words = message_lower.split()
         word_count = len(words)
 
         score = 0.5
 
-        # Length scoring
         if 5 <= word_count <= 30:
             score += 0.2
         elif word_count < 5:
@@ -1632,13 +1396,11 @@ class ConfidenceScorer:
         elif word_count > 50:
             score -= 0.1
 
-        # Question words reduce clarity for action requests
         question_words = ['what', 'how', 'why', 'when', 'where', 'which']
         question_count = sum(1 for qw in question_words if qw in message_lower)
         if question_count > 2:
             score -= 0.2
 
-        # Specific details increase clarity
         specific_indicators = ['#', '@', '-', '/', 'http']
         specificity = sum(1 for ind in specific_indicators if ind in message)
         score += min(specificity * 0.05, 0.2)
@@ -1646,7 +1408,6 @@ class ConfidenceScorer:
         return max(0.0, min(1.0, score))
 
     def _score_plan_quality(self, plan: ExecutionPlan) -> float:
-        """Score quality of execution plan"""
         score = 0.8
 
         if plan.risks:
@@ -1674,7 +1435,6 @@ class ConfidenceScorer:
         entities: List[Entity],
         factors: Dict[str, float]
     ) -> List[str]:
-        """Identify specific uncertainties that should be clarified"""
         uncertainties = []
 
         if factors.get('intent_clarity', 0) < 0.6:
@@ -1710,7 +1470,6 @@ class ConfidenceScorer:
         intents: List[Intent],
         entities: List[Entity]
     ) -> List[str]:
-        """Identify assumptions we're making"""
         assumptions = []
 
         if intents and intents[0].type.value in ['create', 'update']:
@@ -1729,7 +1488,6 @@ class ConfidenceScorer:
         return assumptions
 
     def suggest_clarifications(self, confidence: Confidence, intents: List[Intent]) -> List[str]:
-        """Suggest what clarifying questions to ask"""
         questions = []
 
         if "Unclear what action" in str(confidence.uncertainties):
@@ -1754,19 +1512,15 @@ class ConfidenceScorer:
         return questions
 
     def should_proceed_automatically(self, confidence: Confidence) -> bool:
-        """Should we proceed without asking user?"""
         return confidence.should_proceed()
 
     def should_review_with_user(self, confidence: Confidence) -> bool:
-        """Should we review plan with user before executing?"""
         return confidence.should_review()
 
     def should_ask_clarifying_questions(self, confidence: Confidence) -> bool:
-        """Should we ask clarifying questions?"""
         return confidence.should_clarify()
 
     def get_action_recommendation(self, confidence: Confidence) -> Tuple[str, str]:
-        """Get recommended action based on confidence"""
         if self.should_proceed_automatically(confidence):
             return ('proceed', f"High confidence ({confidence.score:.2f}) - proceeding automatically")
 
@@ -1784,7 +1538,6 @@ class ConfidenceScorer:
         plan: Optional[ExecutionPlan] = None,
         prior_confidence: float = 0.5
     ) -> Confidence:
-        """Bayesian confidence scoring"""
         posterior = prior_confidence
 
         intent_likelihood = self._likelihood_from_intent_clarity(message, intents)
@@ -1822,7 +1575,6 @@ class ConfidenceScorer:
         return confidence
 
     def _bayesian_update(self, prior: float, likelihood: float) -> float:
-        """Bayesian update: P(H|E) = P(E|H) * P(H) / P(E)"""
         prior = max(0.01, min(0.99, prior))
         likelihood = max(0.01, min(0.99, likelihood))
 
@@ -1835,7 +1587,6 @@ class ConfidenceScorer:
         return max(0.0, min(1.0, posterior))
 
     def _likelihood_from_intent_clarity(self, message: str, intents: List[Intent]) -> float:
-        """Compute likelihood from intent clarity"""
         if not intents:
             return 0.2
 
@@ -1854,7 +1605,6 @@ class ConfidenceScorer:
         intents: List[Intent],
         entities: List[Entity]
     ) -> float:
-        """Compute likelihood from entity completeness"""
         if not entities:
             return 0.3
 
@@ -1869,7 +1619,6 @@ class ConfidenceScorer:
             return avg_conf * 0.8
 
     def _likelihood_from_message_clarity(self, message: str) -> float:
-        """Compute likelihood from message clarity"""
         words = message.split()
         word_count = len(words)
 
@@ -1893,7 +1642,6 @@ class ConfidenceScorer:
         return (length_score + ambiguity_score) / 2
 
     def _likelihood_from_plan_quality(self, plan: ExecutionPlan) -> float:
-        """Compute likelihood from plan quality"""
         if not plan.tasks:
             return 0.3
 
@@ -1918,7 +1666,6 @@ class ConfidenceScorer:
         confidence: Confidence,
         historical_accuracy: Optional[Dict[str, float]] = None
     ) -> Confidence:
-        """Calibrate confidence against historical accuracy"""
         if not historical_accuracy:
             return confidence
 
@@ -1941,7 +1688,6 @@ class ConfidenceScorer:
         return calibrated
 
     def _get_confidence_range(self, score: float) -> str:
-        """Get confidence range bucket"""
         if score >= 0.9:
             return "0.9-1.0"
         elif score >= 0.8:
@@ -1954,7 +1700,6 @@ class ConfidenceScorer:
             return "0.0-0.4"
 
     def compute_entropy(self, intents: List[Intent]) -> float:
-        """Compute entropy of intent distribution"""
         if not intents:
             return 0.0
 
@@ -1980,7 +1725,6 @@ class ConfidenceScorer:
         entropy: float,
         cost_of_error: float = 0.5
     ) -> bool:
-        """Bayesian decision theory for clarification"""
         p_correct = confidence.score
         p_wrong = 1 - p_correct
 
@@ -2006,11 +1750,9 @@ class ConfidenceScorer:
         return should_clarify
 
     def get_metrics(self) -> Dict:
-        """Get scorer metrics"""
         return {
             'verbose': self.verbose,
         }
 
     def reset_metrics(self):
-        """Reset metrics"""
         pass

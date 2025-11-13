@@ -1,23 +1,3 @@
-"""
-Web Scraper Agent - Advanced Web Scraping via Firecrawl MCP
-
-This module provides a robust, intelligent agent for web scraping through
-the Model Context Protocol (MCP). It enables data extraction from websites,
-handles JavaScript-rendered content, and provides structured data output.
-
-Features:
-- Advanced web scraping via Firecrawl MCP
-- Crawl entire websites or single pages
-- Extract structured data with AI
-- Handle JavaScript-rendered content
-- Convert pages to Markdown, HTML, or structured JSON
-- Intelligent retry and error handling
-- Metadata caching for faster operations
-- Proactive suggestions
-
-Author: AI System
-Version: 1.0
-"""
 
 import os
 import asyncio
@@ -46,7 +26,6 @@ load_dotenv()
 
 @dataclass
 class OperationStats:
-    """Track scraping operation statistics"""
     total_operations: int = 0
     successful_operations: int = 0
     failed_operations: int = 0
@@ -74,7 +53,6 @@ class OperationStats:
 
 @dataclass
 class RetryConfig:
-    """Retry configuration for resilient scraping operations"""
     MAX_RETRIES: int = 3
     BASE_DELAY: float = 1.0
     MAX_DELAY: float = 10.0
@@ -82,58 +60,29 @@ class RetryConfig:
 
 
 class Agent(BaseAgent):
-    """
-    Intelligent Web Scraping Agent using Firecrawl MCP
-
-    This agent provides intelligent, reliable web scraping through:
-    - Single page and multi-page crawling
-    - JavaScript-rendered content extraction
-    - AI-powered structured data extraction
-    - Markdown, HTML, and JSON output formats
-    - Automatic retry for transient failures
-    - Comprehensive error handling and reporting
-    - Operation tracking and statistics
-    """
-
     def __init__(self, verbose: bool = False, shared_context: Optional[SharedContext] = None,
         session_logger=None
     ):
-        """
-        Initialize Web Scraper Agent
-
-        Args:
-            verbose: Enable detailed logging
-            shared_context: Optional shared context for cross-agent coordination
-                    session_logger: Optional session logger for tracking operations
-        """
         super().__init__()
 
-        # Session logging
         self.logger = session_logger
         self.agent_name = "scraper"
-
         self.verbose = verbose
         self.initialized = False
 
-        # MCP connection components
         self.session: Optional[ClientSession] = None
         self.stdio_context = None
         self.available_tools: List[Any] = []
         self.model: Optional[genai.GenerativeModel] = None
 
-        # Intelligence components (Feature #1, #8, #11)
         self.memory = ConversationMemory()
         self.knowledge = WorkspaceKnowledge()
         self.shared_context = shared_context
         self.proactive = ProactiveAssistant('scraper', verbose)
 
-        # Statistics tracking
         self.stats = OperationStats()
-
-        # Feature #1: Metadata cache for faster operations
         self.metadata_cache = {}
 
-        # Schema type mapping for Gemini
         self.schema_type_map = {
             "string": protos.Type.STRING,
             "number": protos.Type.NUMBER,
@@ -143,11 +92,9 @@ class Agent(BaseAgent):
             "array": protos.Type.ARRAY,
         }
 
-        # System prompt - defines agent behavior
         self.system_prompt = self._build_system_prompt()
 
     def _build_system_prompt(self) -> str:
-        """Build the comprehensive system prompt that defines agent behavior"""
         return """You are an expert web scraping and data extraction specialist with deep knowledge of web technologies, HTML/CSS parsing, and structured data extraction. Your mission is to help users extract valuable data from websites efficiently and reliably.
 
 **Core Capabilities**:

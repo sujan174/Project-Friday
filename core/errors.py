@@ -1,19 +1,4 @@
-"""
-Error Classification and Enhanced Messaging System
-
-Provides intelligent error handling with:
-- Error categorization (transient, permanent, rate limit, etc.)
-- Duplicate operation detection
-- Enhanced, actionable error messages
-- Agent-specific error enhancement
-
-Combines:
-- error_handler.py: Error classification and duplicate detection
-- error_messaging.py: Enhanced user-friendly messages
-
-Author: AI System
-Version: 2.0 (Merged)
-"""
+"""Error Classification and Enhanced Messaging System"""
 
 from enum import Enum
 from typing import Dict, List, Any, Optional, Tuple
@@ -22,18 +7,14 @@ import hashlib
 import re
 
 
-# ============================================================================
-# ERROR CLASSIFICATION
-# ============================================================================
-
 class ErrorCategory(str, Enum):
     """Categories of errors with different handling strategies"""
-    TRANSIENT = "transient"          # Temporary - retry with backoff
-    RATE_LIMIT = "rate_limit"        # API rate limited - retry with longer delay
-    CAPABILITY = "capability"        # API doesn't support this - don't retry
-    PERMISSION = "permission"        # Access denied - require user action
-    VALIDATION = "validation"        # Invalid input - don't retry
-    UNKNOWN = "unknown"              # Unknown - assume retryable but inform
+    TRANSIENT = "transient"
+    RATE_LIMIT = "rate_limit"
+    CAPABILITY = "capability"
+    PERMISSION = "permission"
+    VALIDATION = "validation"
+    UNKNOWN = "unknown"
 
 
 @dataclass
@@ -41,10 +22,10 @@ class ErrorClassification:
     """Complete error classification with recovery suggestions"""
     category: ErrorCategory
     is_retryable: bool
-    explanation: str  # What happened in simple terms
-    technical_details: Optional[str] = None  # Full error message
-    suggestions: List[str] = None  # What user can do
-    retry_delay_seconds: int = 0  # Backoff delay for rate limits
+    explanation: str
+    technical_details: Optional[str] = None
+    suggestions: List[str] = None
+    retry_delay_seconds: int = 0
 
     def __post_init__(self):
         if self.suggestions is None:
@@ -52,17 +33,8 @@ class ErrorClassification:
 
 
 class ErrorClassifier:
-    """
-    Intelligent error classification system.
+    """Intelligent error classification system"""
 
-    Analyzes error messages to determine:
-    - Root cause category
-    - Whether to retry
-    - How to inform the user
-    - What to suggest next
-    """
-
-    # Error patterns for each category
     CAPABILITY_PATTERNS = [
         'does not support',
         'cannot fetch',
@@ -125,22 +97,9 @@ class ErrorClassifier:
 
     @staticmethod
     def classify(error_msg: str, agent_name: Optional[str] = None) -> ErrorClassification:
-        """
-        Classify an error message and return handling strategy.
-
-        Args:
-            error_msg: The error message string
-            agent_name: Optional agent name for context-specific classification
-
-        Returns:
-            ErrorClassification with category, retry decision, and suggestions
-        """
+        """Classify an error message and return handling strategy"""
         error_lower = error_msg.lower()
 
-        # Check each category in priority order
-        # (more specific categories first)
-
-        # 1. Check for CAPABILITY errors (permanent - don't retry)
         if ErrorClassifier._matches_patterns(error_lower, ErrorClassifier.CAPABILITY_PATTERNS):
             return ErrorClassification(
                 category=ErrorCategory.CAPABILITY,
@@ -154,7 +113,6 @@ class ErrorClassifier:
                 ]
             )
 
-        # 2. Check for PERMISSION errors (permanent - don't retry)
         if ErrorClassifier._matches_patterns(error_lower, ErrorClassifier.PERMISSION_PATTERNS):
             return ErrorClassification(
                 category=ErrorCategory.PERMISSION,
@@ -169,7 +127,6 @@ class ErrorClassifier:
                 ]
             )
 
-        # 3. Check for VALIDATION errors (permanent - don't retry)
         if ErrorClassifier._matches_patterns(error_lower, ErrorClassifier.VALIDATION_PATTERNS):
             return ErrorClassification(
                 category=ErrorCategory.VALIDATION,
@@ -183,7 +140,6 @@ class ErrorClassifier:
                 ]
             )
 
-        # 4. Check for RATE_LIMIT errors (retryable with backoff)
         if ErrorClassifier._matches_patterns(error_lower, ErrorClassifier.RATE_LIMIT_PATTERNS):
             return ErrorClassification(
                 category=ErrorCategory.RATE_LIMIT,
@@ -194,10 +150,9 @@ class ErrorClassifier:
                     "• Operation will be retried automatically",
                     "• Consider spacing out large operations",
                 ],
-                retry_delay_seconds=10  # Wait 10 seconds before retry
+                retry_delay_seconds=10
             )
 
-        # 5. Check for TRANSIENT errors (retryable)
         if ErrorClassifier._matches_patterns(error_lower, ErrorClassifier.TRANSIENT_PATTERNS):
             return ErrorClassification(
                 category=ErrorCategory.TRANSIENT,
@@ -211,7 +166,6 @@ class ErrorClassifier:
                 retry_delay_seconds=2
             )
 
-        # 6. Default to UNKNOWN (assume retryable but flag)
         return ErrorClassification(
             category=ErrorCategory.UNKNOWN,
             is_retryable=True,
@@ -226,7 +180,7 @@ class ErrorClassifier:
 
     @staticmethod
     def _matches_patterns(text: str, patterns: List[str]) -> bool:
-        """Check if text matches any pattern (case-insensitive)"""
+        """Check if text matches any pattern"""
         return any(pattern in text for pattern in patterns)
 
 
@@ -237,21 +191,8 @@ def format_error_for_user(
     attempt_number: int = 1,
     max_attempts: int = 3
 ) -> str:
-    """
-    Format an error classification into a user-friendly message.
+    """Format an error classification into a user-friendly message"""
 
-    Args:
-        classification: The error classification
-        agent_name: Name of the agent that failed
-        instruction: The original instruction
-        attempt_number: Current attempt number
-        max_attempts: Maximum retry attempts
-
-    Returns:
-        Formatted error message for user
-    """
-
-    # Build error header based on category
     if classification.category == ErrorCategory.CAPABILITY:
         header = "❌ **Cannot perform this operation**"
     elif classification.category == ErrorCategory.PERMISSION:
@@ -265,90 +206,54 @@ def format_error_for_user(
     else:
         header = "⚠️ **Error**"
 
-    # Build message
     message = f"{header}\n\n"
     message += f"**What happened**: {classification.explanation}\n\n"
 
-    # Add retry context if applicable
     if classification.is_retryable and attempt_number > 1:
         message += f"**Attempt**: {attempt_number}/{max_attempts}\n\n"
 
-    # Add suggestions
     if classification.suggestions:
         message += "**What you can try**:\n"
         for suggestion in classification.suggestions:
             message += f"{suggestion}\n"
         message += "\n"
 
-    # Add technical details if verbose or UNKNOWN
     if classification.category == ErrorCategory.UNKNOWN:
         message += f"**Technical details**: {classification.technical_details}\n"
 
     return message.strip()
 
 
-# ============================================================================
-# DUPLICATE OPERATION DETECTION
-# ============================================================================
-
 class DuplicateOperationDetector:
-    """
-    Detects when the same operation is being retried multiple times with identical failures.
-
-    This catches situations like:
-    - Agent keeps trying the same impossible operation
-    - Agent forgets it already executed something
-    - Stuck in retry loop for operation that will never succeed
-
-    Example from real session:
-    - Notion agent adds tasks successfully
-    - Then retries adding same tasks 10+ times
-    - Each time gives different/conflicting responses
-    - User keeps retrying thinking they're different operations
-    """
+    """Detects when the same operation is being retried multiple times with identical failures"""
 
     def __init__(self, window_size: int = 5, similarity_threshold: float = 0.8):
-        """
-        Initialize duplicate detector.
-
-        Args:
-            window_size: Number of recent operations to track
-            similarity_threshold: How similar errors need to be (0.0-1.0)
-        """
         self.window_size = window_size
         self.similarity_threshold = similarity_threshold
         self.operation_history: Dict[str, List[Dict[str, Any]]] = {}
 
     def _create_operation_hash(self, agent_name: str, instruction: str) -> str:
-        """Create a hash of the operation (agent + instruction)"""
+        """Create a hash of the operation"""
         key = f"{agent_name}:{instruction[:100]}"
         return hashlib.md5(key.encode()).hexdigest()[:12]
 
     def _similarity_score(self, error1: str, error2: str) -> float:
-        """
-        Calculate similarity between two error messages.
-
-        Returns: 0.0 (completely different) to 1.0 (identical)
-        """
+        """Calculate similarity between two error messages (0.0 to 1.0)"""
         if error1 == error2:
             return 1.0
 
-        # Normalize to lowercase
         e1 = error1.lower()
         e2 = error2.lower()
 
-        # Check if one contains the other (high similarity)
         if e1 in e2 or e2 in e1:
             return 0.9
 
-        # Count matching words
         words1 = set(e1.split())
         words2 = set(e2.split())
 
         if not words1 or not words2:
             return 0.0
 
-        # Calculate Jaccard similarity
         intersection = len(words1 & words2)
         union = len(words1 | words2)
 
@@ -361,27 +266,17 @@ class DuplicateOperationDetector:
         error: str,
         success: bool = False
     ) -> None:
-        """
-        Track an operation attempt.
-
-        Args:
-            agent_name: Name of the agent
-            instruction: The instruction being executed
-            error: Error message (or empty if success)
-            success: Whether the operation succeeded
-        """
+        """Track an operation attempt"""
         op_hash = self._create_operation_hash(agent_name, instruction)
 
         if op_hash not in self.operation_history:
             self.operation_history[op_hash] = []
 
-        # Add to history
         self.operation_history[op_hash].append({
             'error': error,
             'success': success
         })
 
-        # Keep only recent attempts
         if len(self.operation_history[op_hash]) > self.window_size:
             self.operation_history[op_hash] = self.operation_history[op_hash][-self.window_size:]
 
@@ -391,14 +286,7 @@ class DuplicateOperationDetector:
         instruction: str,
         current_error: str
     ) -> Tuple[bool, Optional[str]]:
-        """
-        Detect if this operation has failed multiple times identically or similarly.
-
-        Returns:
-            (is_duplicate, explanation)
-            - is_duplicate: True if this looks like a stuck operation
-            - explanation: Description of what's happening
-        """
+        """Detect if this operation has failed multiple times identically or similarly"""
         op_hash = self._create_operation_hash(agent_name, instruction)
 
         if op_hash not in self.operation_history:
@@ -409,23 +297,19 @@ class DuplicateOperationDetector:
         if len(history) < 2:
             return False, None
 
-        # Get recent failed attempts
         recent_failures = [h for h in history if not h['success']]
 
         if len(recent_failures) < 2:
             return False, None
 
-        # Check if errors are similar
         error_messages = [f['error'] for f in recent_failures]
 
-        # Compare last error with previous ones
         similar_count = 0
         for prev_error in error_messages[:-1]:
             similarity = self._similarity_score(current_error, prev_error)
             if similarity >= self.similarity_threshold:
                 similar_count += 1
 
-        # If 2+ similar errors, it's a duplicate failure pattern
         if similar_count >= 1:
             num_attempts = len(recent_failures)
             return True, (
@@ -433,7 +317,6 @@ class DuplicateOperationDetector:
                 f"The {agent_name} agent appears to be stuck or unable to complete this task."
             )
 
-        # Check for conflicting responses (different errors for same operation)
         if len(set(error_messages)) > 1 and len(recent_failures) >= 3:
             return True, (
                 f"The {agent_name} agent is giving conflicting responses for the same operation. "
@@ -447,14 +330,7 @@ class DuplicateOperationDetector:
         agent_name: str,
         instruction: str
     ) -> Tuple[bool, Optional[List[str]]]:
-        """
-        Detect if agent is giving inconsistent responses (success/failure alternating).
-
-        Returns:
-            (is_inconsistent, response_pattern)
-            - is_inconsistent: True if responses are contradictory
-            - response_pattern: List of recent responses (success/failed)
-        """
+        """Detect if agent is giving inconsistent responses"""
         op_hash = self._create_operation_hash(agent_name, instruction)
 
         if op_hash not in self.operation_history:
@@ -465,15 +341,12 @@ class DuplicateOperationDetector:
         if len(history) < 3:
             return False, None
 
-        # Get recent attempts
-        recent = history[-5:]  # Last 5
+        recent = history[-5:]
         pattern = ['success' if h['success'] else 'failed' for h in recent]
 
-        # Check for alternating or chaotic pattern
         success_count = sum(1 for h in recent if h['success'])
         failed_count = len(recent) - success_count
 
-        # If both successes AND failures in recent attempts, that's suspicious
         if success_count > 0 and failed_count > 0 and len(recent) >= 3:
             return True, pattern
 
@@ -484,9 +357,7 @@ class DuplicateOperationDetector:
         agent_name: str,
         instruction: str
     ) -> Optional[str]:
-        """
-        Get a summary of duplicate/stuck operations for this agent+instruction.
-        """
+        """Get a summary of duplicate/stuck operations"""
         op_hash = self._create_operation_hash(agent_name, instruction)
 
         if op_hash not in self.operation_history:
@@ -507,20 +378,16 @@ class DuplicateOperationDetector:
         )
 
 
-# ============================================================================
-# ENHANCED ERROR MESSAGING
-# ============================================================================
-
 @dataclass
 class EnhancedError:
     """Enhanced error message with context and suggestions"""
     agent_name: str
-    error_type: str  # 'not_found', 'permission', 'validation', etc.
-    what_failed: str  # What the user tried to do
-    why_failed: str  # Root cause explanation
-    what_was_tried: Optional[str] = None  # What specific value/path was tried
-    suggestions: List[str] = None  # Actionable suggestions
-    alternatives: List[str] = None  # Alternative options found
+    error_type: str
+    what_failed: str
+    why_failed: str
+    what_was_tried: Optional[str] = None
+    suggestions: List[str] = None
+    alternatives: List[str] = None
 
     def __post_init__(self):
         if self.suggestions is None:
@@ -532,23 +399,17 @@ class EnhancedError:
         """Format as user-friendly message"""
         lines = [f"❌ **{self.agent_name.title()} Error**\n"]
 
-        # What failed
         lines.append(f"**What failed:** {self.what_failed}")
-
-        # Why it failed
         lines.append(f"**Why:** {self.why_failed}")
 
-        # What was tried (if available)
         if self.what_was_tried:
             lines.append(f"**Attempted:** `{self.what_was_tried}`")
 
-        # Alternatives (if found)
         if self.alternatives:
             lines.append(f"\n**💡 Did you mean:**")
-            for alt in self.alternatives[:5]:  # Show top 5
+            for alt in self.alternatives[:5]:
                 lines.append(f"  • `{alt}`")
 
-        # Suggestions
         if self.suggestions:
             lines.append(f"\n**🔧 How to fix:**")
             for suggestion in self.suggestions:
@@ -558,15 +419,7 @@ class EnhancedError:
 
 
 class ErrorMessageEnhancer:
-    """
-    Enhances error messages from agents to be more helpful.
-
-    Features:
-    - Extracts key information from raw errors
-    - Suggests similar alternatives
-    - Provides actionable fixes
-    - Detects common issues
-    """
+    """Enhances error messages from agents to be more helpful"""
 
     def __init__(self, verbose: bool = False):
         self.verbose = verbose
@@ -580,21 +433,16 @@ class ErrorMessageEnhancer:
         """Enhance GitHub agent errors"""
         error_str = str(error).lower()
 
-        # Pattern: Directory/file not found
         if 'not found' in error_str or '404' in error_str:
-            # Extract what was being searched for
             path_match = re.search(r'([\w\-_/]+/[\w\-_/]+)', str(error))
             attempted_path = path_match.group(1) if path_match else "unknown"
 
-            # Extract repo and path
             repo_match = re.search(r'([\w\-_]+/[\w\-_]+)', attempted_path)
             repo = repo_match.group(1) if repo_match else None
 
-            # Determine if it's a repo or path issue
             if '/' in attempted_path and attempted_path.count('/') > 1:
-                # It's a path within a repo
                 path_parts = attempted_path.split('/')
-                wrong_path = '/'.join(path_parts[2:])  # After owner/repo
+                wrong_path = '/'.join(path_parts[2:])
 
                 return EnhancedError(
                     agent_name="GitHub",
@@ -611,7 +459,6 @@ class ErrorMessageEnhancer:
                     alternatives=self._suggest_github_paths(wrong_path, available_context)
                 )
             else:
-                # It's a repo not found
                 return EnhancedError(
                     agent_name="GitHub",
                     error_type="repo_not_found",
@@ -625,7 +472,6 @@ class ErrorMessageEnhancer:
                     ]
                 )
 
-        # Pattern: Permission denied
         elif 'permission' in error_str or 'forbidden' in error_str or '403' in error_str:
             return EnhancedError(
                 agent_name="GitHub",
@@ -640,7 +486,6 @@ class ErrorMessageEnhancer:
                 ]
             )
 
-        # Pattern: Rate limit
         elif 'rate limit' in error_str or '429' in error_str:
             return EnhancedError(
                 agent_name="GitHub",
@@ -654,7 +499,6 @@ class ErrorMessageEnhancer:
                 ]
             )
 
-        # Default generic error
         return EnhancedError(
             agent_name="GitHub",
             error_type="unknown",
@@ -671,7 +515,6 @@ class ErrorMessageEnhancer:
         """Suggest similar GitHub paths based on common patterns"""
         suggestions = []
 
-        # Common corrections
         corrections = {
             'middlewares': 'middleware',
             'controller': 'controllers',
@@ -691,26 +534,22 @@ class ErrorMessageEnhancer:
                 suggested = wrong_path.lower().replace(wrong, correct)
                 suggestions.append(suggested)
 
-        # If context provided with actual paths, suggest those
         if context and 'available_paths' in context:
             available = context['available_paths']
-            # Find similar paths using simple string matching
             for path in available:
                 if self._similarity(wrong_path.lower(), path.lower()) > 0.6:
                     suggestions.append(path)
 
-        return suggestions[:5]  # Top 5
+        return suggestions[:5]
 
     def _similarity(self, a: str, b: str) -> float:
         """Calculate simple string similarity (0.0 - 1.0)"""
         if a == b:
             return 1.0
 
-        # Check if one contains the other
         if a in b or b in a:
             return 0.8
 
-        # Count matching characters
         matches = sum(1 for c1, c2 in zip(a, b) if c1 == c2)
         max_len = max(len(a), len(b))
 
@@ -721,7 +560,6 @@ class ErrorMessageEnhancer:
         error_str = str(error).lower()
 
         if 'not found' in error_str or '404' in error_str:
-            # Extract issue key if present
             issue_match = re.search(r'([A-Z]+-\d+)', str(error), re.IGNORECASE)
             issue_key = issue_match.group(1) if issue_match else "unknown"
 
@@ -845,11 +683,7 @@ class ErrorMessageEnhancer:
         instruction: str,
         context: Optional[Dict[str, Any]] = None
     ) -> EnhancedError:
-        """
-        Main method to enhance any agent error.
-
-        Routes to agent-specific enhancer.
-        """
+        """Main method to enhance any agent error"""
         agent_lower = agent_name.lower()
 
         if agent_lower == 'github':
@@ -861,7 +695,6 @@ class ErrorMessageEnhancer:
         elif agent_lower == 'notion':
             return self.enhance_notion_error(error, instruction)
         else:
-            # Generic enhancer
             return EnhancedError(
                 agent_name=agent_name.title(),
                 error_type="unknown",

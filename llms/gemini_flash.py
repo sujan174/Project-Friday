@@ -1,19 +1,3 @@
-"""
-Gemini 2.5 Flash LLM Implementation
-
-Google's Gemini 2.5 Flash model implementation with MCP tool support.
-
-Features:
-- Fast inference with Gemini 2.5 Flash
-- Function calling / tool use support
-- Async-first design
-- MCP tool schema conversion
-- Chat session management
-
-Author: AI System
-Version: 1.0
-"""
-
 import google.generativeai as genai
 import google.generativeai.protos as protos
 from typing import Any, Dict, List, Optional
@@ -31,38 +15,24 @@ from llms.base_llm import (
 
 
 class GeminiChatSession(ChatSession):
-    """Gemini-specific chat session implementation"""
-
     def __init__(self, gemini_chat: Any, enable_function_calling: bool = False):
-        """
-        Initialize Gemini chat session
-
-        Args:
-            gemini_chat: Gemini chat object
-            enable_function_calling: Whether function calling is enabled
-        """
         self.gemini_chat = gemini_chat
         self.enable_function_calling = enable_function_calling
 
     async def send_message(self, message: str) -> LLMResponse:
-        """Send message and get response"""
         response = await self.gemini_chat.send_message_async(message)
 
-        # Extract text (may be None if response has function calls)
         text = None
         try:
             if hasattr(response, 'text'):
                 text = response.text
         except Exception:
-            # response.text fails if there are function_call parts
-            # Try to extract text from parts manually
             if response.candidates:
                 for part in response.candidates[0].content.parts:
                     if hasattr(part, 'text') and part.text:
                         text = part.text
                         break
 
-        # Extract function calls if enabled
         function_calls = None
         if self.enable_function_calling:
             function_calls = self._extract_function_calls(response)
@@ -79,9 +49,7 @@ class GeminiChatSession(ChatSession):
         message: str,
         function_result: Optional[Dict[str, Any]] = None
     ) -> LLMResponse:
-        """Send message with function results"""
         if function_result:
-            # Build function response in Gemini format
             function_name = function_result.get('name')
             result_data = function_result.get('result', {})
 
@@ -98,11 +66,9 @@ class GeminiChatSession(ChatSession):
         else:
             response = await self.gemini_chat.send_message_async(message)
 
-        # Extract text
         try:
             text = response.text
         except Exception:
-            # Fallback if response.text fails
             text = None
             if response.candidates:
                 for part in response.candidates[0].content.parts:
@@ -110,7 +76,6 @@ class GeminiChatSession(ChatSession):
                         text = part.text
                         break
 
-        # Extract function calls
         function_calls = self._extract_function_calls(response)
 
         return LLMResponse(
@@ -121,7 +86,6 @@ class GeminiChatSession(ChatSession):
         )
 
     def _extract_function_calls(self, response: Any) -> List[FunctionCall]:
-        """Extract function calls from Gemini response"""
         function_calls = []
 
         if not response.candidates:
@@ -140,7 +104,6 @@ class GeminiChatSession(ChatSession):
         return function_calls
 
     def get_history(self) -> List[ChatMessage]:
-        """Get chat history in universal format"""
         history = []
 
         if hasattr(self.gemini_chat, 'history'):
@@ -162,14 +125,8 @@ class GeminiChatSession(ChatSession):
 
 
 class GeminiFlash(BaseLLM):
-    """
-    Google Gemini 2.5 Flash implementation
+    """Google Gemini 2.5 Flash implementation with function calling support"""
 
-    Fast, efficient model with function calling support.
-    Ideal for agent workflows and MCP integrations.
-    """
-
-    # Schema type mapping for Gemini protobuf
     SCHEMA_TYPE_MAP = {
         "string": protos.Type.STRING,
         "number": protos.Type.NUMBER,
@@ -180,13 +137,6 @@ class GeminiFlash(BaseLLM):
     }
 
     def __init__(self, config: Optional[LLMConfig] = None):
-        """
-        Initialize Gemini 2.5 Flash
-
-        Args:
-            config: LLM configuration (uses defaults if not provided)
-        """
-        # Default configuration
         if config is None:
             config = LLMConfig(
                 model_name='models/gemini-2.5-flash',
@@ -199,28 +149,15 @@ class GeminiFlash(BaseLLM):
 
         self.provider_name = "google_gemini"
         self.supports_function_calling = True
-
-        # Store tools for model initialization
         self.tools = []
 
     async def generate_content(self, prompt: str) -> LLMResponse:
-        """
-        Generate content from prompt
-
-        Args:
-            prompt: Text prompt
-
-        Returns:
-            LLMResponse with generated text
-        """
-        # Create model for simple generation
         model = genai.GenerativeModel(
             self.config.model_name,
             system_instruction=self.config.system_instruction
         )
 
         response = await model.generate_content_async(prompt)
-
         text = response.text if hasattr(response, 'text') else None
 
         return LLMResponse(
@@ -234,22 +171,10 @@ class GeminiFlash(BaseLLM):
         history: Optional[List[ChatMessage]] = None,
         enable_function_calling: bool = False
     ) -> ChatSession:
-        """
-        Start a chat session
-
-        Args:
-            history: Optional chat history
-            enable_function_calling: Enable function calling
-
-        Returns:
-            GeminiChatSession instance
-        """
-        # Convert history to Gemini format if provided
         gemini_history = None
         if history:
             gemini_history = self._convert_history(history)
 
-        # Create model with tools if function calling is enabled
         if enable_function_calling and self.tools:
             model = genai.GenerativeModel(
                 self.config.model_name,
@@ -262,36 +187,24 @@ class GeminiFlash(BaseLLM):
                 system_instruction=self.config.system_instruction
             )
 
-        # Start chat
         gemini_chat = model.start_chat(
             history=gemini_history,
-            enable_automatic_function_calling=False  # We handle function calling manually
+            enable_automatic_function_calling=False
         )
 
         return GeminiChatSession(gemini_chat, enable_function_calling)
 
     def build_function_declaration(self, tool: Any) -> protos.FunctionDeclaration:
-        """
-        Convert MCP tool to Gemini FunctionDeclaration
-
-        Args:
-            tool: MCP tool object
-
-        Returns:
-            Gemini FunctionDeclaration
-        """
-        # Build parameters schema
+        """Convert MCP tool to Gemini FunctionDeclaration"""
         parameters_schema = protos.Schema(type_=protos.Type.OBJECT)
 
         if hasattr(tool, 'inputSchema'):
             schema = tool.inputSchema
 
-            # Add properties
             if "properties" in schema:
                 for prop_name, prop_schema in schema["properties"].items():
                     parameters_schema.properties[prop_name] = self._convert_schema(prop_schema)
 
-            # Add required fields
             if "required" in schema:
                 parameters_schema.required.extend(schema["required"])
 
@@ -305,27 +218,22 @@ class GeminiFlash(BaseLLM):
         """Convert JSON schema to Gemini protobuf schema"""
         schema_pb = protos.Schema()
 
-        # Set type
         if "type" in schema:
             schema_pb.type_ = self.SCHEMA_TYPE_MAP.get(
                 schema["type"],
                 protos.Type.TYPE_UNSPECIFIED
             )
 
-        # Set description
         if "description" in schema:
             schema_pb.description = schema["description"]
 
-        # Set enum values
         if "enum" in schema:
             schema_pb.enum.extend(schema["enum"])
 
-        # Recursively convert properties
         if "properties" in schema and isinstance(schema["properties"], dict):
             for prop_name, prop_schema in schema["properties"].items():
                 schema_pb.properties[prop_name] = self._convert_schema(prop_schema)
 
-        # Convert items for arrays
         if "items" in schema:
             schema_pb.items = self._convert_schema(schema["items"])
 
@@ -336,16 +244,6 @@ class GeminiFlash(BaseLLM):
         function_name: str,
         result: Dict[str, Any]
     ) -> protos.Content:
-        """
-        Build Gemini function response
-
-        Args:
-            function_name: Function name
-            result: Function result
-
-        Returns:
-            Gemini Content with function response
-        """
         return genai.protos.Content(
             parts=[genai.protos.Part(
                 function_response=genai.protos.FunctionResponse(
@@ -356,15 +254,6 @@ class GeminiFlash(BaseLLM):
         )
 
     def extract_function_calls(self, response: Any) -> List[FunctionCall]:
-        """
-        Extract function calls from Gemini response
-
-        Args:
-            response: Gemini response object
-
-        Returns:
-            List of FunctionCall objects
-        """
         function_calls = []
 
         if not hasattr(response, 'candidates') or not response.candidates:
@@ -383,18 +272,9 @@ class GeminiFlash(BaseLLM):
         return function_calls
 
     def set_tools(self, tools: List[Any]):
-        """
-        Set tools/functions for the model
-
-        Args:
-            tools: List of Gemini FunctionDeclaration objects
-        """
         self.tools = tools
 
     def _convert_history(self, history: List[ChatMessage]) -> List:
-        """Convert universal ChatMessage history to Gemini format"""
-        # For now, return None and let Gemini handle it
-        # Can be enhanced later if needed
         return None
 
     def __repr__(self) -> str:

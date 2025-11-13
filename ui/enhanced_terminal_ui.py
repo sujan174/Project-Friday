@@ -1,20 +1,3 @@
-"""
-Enhanced Terminal UI - Ultra Modern Edition v4.0
-
-A world-class terminal interface featuring:
-- Beautiful, consistent design language
-- Smooth animations and transitions
-- Intelligent loading states
-- Real-time streaming responses
-- Comprehensive help system
-- Session analytics dashboard
-- Keyboard shortcuts
-- Professional visual hierarchy
-
-Author: AI System
-Version: 4.0 - Ultra Modern Edition
-"""
-
 import sys
 import time
 import asyncio
@@ -44,26 +27,11 @@ from ui.design_system import ds, build_status_text, build_key_value, build_divid
 
 
 class EnhancedTerminalUI:
-    """
-    Ultra-modern terminal interface with design system integration.
-
-    Features:
-    - Unified visual language via design system
-    - Smooth animations and transitions
-    - Intelligent loading states
-    - Real-time streaming responses
-    - Comprehensive help system
-    - Session analytics dashboard
-    - Keyboard shortcuts
-    - Professional visual hierarchy
-    - Context-aware notifications
-    """
 
     def __init__(self, verbose: bool = False):
         self.console = ds.get_console()
         self.verbose = verbose
 
-        # Session state
         self.session_start = datetime.now()
         self.message_count = 0
         self.agent_calls = {}
@@ -73,24 +41,16 @@ class EnhancedTerminalUI:
             'agent_calls_by_type': {}
         }
 
-        # UI state
         self.show_help = False
         self.current_operation = None
         self.last_notification = None
 
-    # ═══════════════════════════════════════════════════════════════
-    # SCREEN MANAGEMENT
-    # ═══════════════════════════════════════════════════════════════
-
     def clear_screen(self):
-        """Clear terminal screen with smooth transition"""
         self.console.clear()
 
     def print_header(self, session_id: str):
-        """Print stunning, modern header on startup"""
         self.clear_screen()
 
-        # ASCII Art Banner
         banner = Text()
         banner.append("\n")
         banner.append("     █████╗ ██╗    ██╗ ██████╗ ██████╗  ██████╗██╗  ██╗███████╗\n", style=f"bold {ds.colors.primary_500}")
@@ -115,7 +75,6 @@ class EnhancedTerminalUI:
         self.console.print(header_content)
         self.console.print()
 
-        # Session info card
         session_content = Text()
         session_content.append(f"{ds.icons.rocket} ", style=ds.colors.accent_purple)
         session_content.append("Session: ", style=ds.semantic.component['label'])
@@ -142,12 +101,7 @@ class EnhancedTerminalUI:
         self.console.print(Padding(info_panel, (0, 2)))
         self.console.print()
 
-    # ═══════════════════════════════════════════════════════════════
-    # AGENT DISCOVERY & LOADING
-    # ═══════════════════════════════════════════════════════════════
-
     def print_agent_discovery_start(self):
-        """Show agent discovery start with animation"""
         self.console.print()
 
         header = Text()
@@ -158,9 +112,6 @@ class EnhancedTerminalUI:
         self.console.print()
 
     def print_agent_table(self, loaded_agents: List[Dict[str, Any]], failed_agents: List[str] = None):
-        """Display beautiful agent capability table"""
-
-        # Create modern table
         table = Table(
             show_header=True,
             header_style=f"bold {ds.colors.text_primary}",
@@ -178,14 +129,12 @@ class EnhancedTerminalUI:
             name = agent['name'].replace('_', ' ').title()
             caps = agent.get('capabilities', [])
 
-            # Format capabilities nicely
             if len(caps) > 3:
                 caps_text = ", ".join(caps[:3])
                 caps_text = f"{caps_text}..."
             else:
                 caps_text = ", ".join(caps) if caps else "General purpose"
 
-            # Icon for agent type
             agent_icon = self._get_agent_icon(agent['name'])
 
             table.add_row(
@@ -196,7 +145,6 @@ class EnhancedTerminalUI:
 
         self.console.print(Padding(table, (0, 2)))
 
-        # Show failed agents if any
         if failed_agents and len(failed_agents) > 0:
             warning = Text()
             warning.append(f"\n{ds.icons.warning} ", style=ds.colors.warning)
@@ -207,8 +155,6 @@ class EnhancedTerminalUI:
         self.console.print()
 
     def print_loaded_summary(self, loaded_count: int, failed_count: int):
-        """Print beautiful summary after agent loading"""
-
         summary = Text()
         summary.append(f"\n{ds.icons.success} ", style=ds.colors.success)
         summary.append(f"Loaded ", style=ds.colors.success)
@@ -230,7 +176,6 @@ class EnhancedTerminalUI:
         self.console.print()
 
     def _get_agent_icon(self, agent_name: str) -> str:
-        """Get appropriate icon for agent type"""
         icon_map = {
             'slack': '💬',
             'jira': '📊',
@@ -248,12 +193,7 @@ class EnhancedTerminalUI:
 
         return ds.icons.agent
 
-    # ═══════════════════════════════════════════════════════════════
-    # USER INTERACTION
-    # ═══════════════════════════════════════════════════════════════
-
     def print_prompt(self):
-        """Print modern user input prompt"""
         prompt_text = Text()
         prompt_text.append("\n┃ ", style=f"bold {ds.colors.border_bright}")
         prompt_text.append(f"{ds.icons.user} ", style=ds.colors.accent_teal)
@@ -265,7 +205,6 @@ class EnhancedTerminalUI:
         self.console.print(prompt_text, end="")
 
     def print_thinking(self):
-        """Show intelligent thinking indicator"""
         thinking = Text()
         thinking.append("┃ ", style=f"bold {ds.colors.border_bright}")
         thinking.append(f"{ds.icons.thinking} ", style=ds.colors.accent_purple)
@@ -276,7 +215,6 @@ class EnhancedTerminalUI:
         self.console.print(thinking)
 
     def print_assistant_header(self):
-        """Print assistant response header"""
         header = Text()
         header.append("\n┃ ", style=f"bold {ds.colors.border_bright}")
         header.append(f"{ds.icons.sparkle} ", style=ds.colors.accent_purple)
@@ -284,33 +222,22 @@ class EnhancedTerminalUI:
 
         self.console.print(header)
 
-    # ═══════════════════════════════════════════════════════════════
-    # RESPONSE RENDERING
-    # ═══════════════════════════════════════════════════════════════
-
     def print_response(self, response: str):
-        """Print assistant response with beautiful markdown rendering"""
         self.print_assistant_header()
 
-        # Clean response text and normalize formatting
         cleaned_response = response.strip()
 
-        # Fix common markdown rendering issues
-        # Remove excessive indentation that causes code block interpretation
         lines = cleaned_response.split('\n')
         normalized_lines = []
 
         for line in lines:
-            # If line starts with excessive spaces (>4), reduce to maintain list structure
-            if line.startswith('     '):  # 5+ spaces
-                # Keep list indentation but not excessive
+            if line.startswith('     '):
                 normalized_lines.append('  ' + line.lstrip())
             else:
                 normalized_lines.append(line)
 
         cleaned_response = '\n'.join(normalized_lines)
 
-        # Render markdown with proper settings
         md = Markdown(
             cleaned_response,
             code_theme="monokai",
@@ -319,7 +246,6 @@ class EnhancedTerminalUI:
             justify="left"
         )
 
-        # Create elegant response panel
         response_panel = Panel(
             md,
             border_style=ds.colors.border,
@@ -335,21 +261,13 @@ class EnhancedTerminalUI:
         self.session_stats['successes'] += 1
 
     def print_streaming_response(self, response_generator):
-        """Stream response with live updates (future enhancement)"""
-        # For now, collect and print
         full_response = ""
         for chunk in response_generator:
             full_response += chunk
 
         self.print_response(full_response)
 
-    # ═══════════════════════════════════════════════════════════════
-    # TOOL CALLS & AGENT EXECUTION
-    # ═══════════════════════════════════════════════════════════════
-
     def print_tool_call(self, agent_name: str, tool_name: str):
-        """Show modern tool call indicator"""
-        # Track agent calls
         self.agent_calls[agent_name] = self.agent_calls.get(agent_name, 0) + 1
         self.session_stats['agent_calls_by_type'][agent_name] = \
             self.session_stats['agent_calls_by_type'].get(agent_name, 0) + 1
@@ -367,7 +285,6 @@ class EnhancedTerminalUI:
         self.console.print(status)
 
     def print_tool_result(self, success: bool, message: Optional[str] = None):
-        """Show beautiful tool result"""
         status = Text()
         status.append("┃  ", style=f"bold {ds.colors.border_bright}")
 
@@ -390,14 +307,7 @@ class EnhancedTerminalUI:
 
         self.console.print(status)
 
-    # ═══════════════════════════════════════════════════════════════
-
-    # ═══════════════════════════════════════════════════════════════
-    # ERRORS & NOTIFICATIONS
-    # ═══════════════════════════════════════════════════════════════
-
     def print_error(self, error: str, traceback_str: Optional[str] = None):
-        """Print beautiful, informative error message"""
         self.console.print()
         self.session_stats['errors'] += 1
 
@@ -428,7 +338,6 @@ class EnhancedTerminalUI:
         self.console.print()
 
     def show_notification(self, message: str, type: str = "info"):
-        """Show elegant notification"""
         type_config = {
             'success': (ds.icons.success, ds.colors.success),
             'error': (ds.icons.error, ds.colors.error),
@@ -452,15 +361,9 @@ class EnhancedTerminalUI:
         self.console.print(panel)
         self.console.print()
 
-    # ═══════════════════════════════════════════════════════════════
-    # SESSION MANAGEMENT
-    # ═══════════════════════════════════════════════════════════════
-
     def print_session_stats(self, stats: Optional[Dict[str, Any]] = None):
-        """Print beautiful session statistics dashboard"""
         self.console.print()
 
-        # Calculate duration
         duration = datetime.now() - self.session_start
         hours = int(duration.total_seconds() // 3600)
         minutes = int((duration.total_seconds() % 3600) // 60)
@@ -473,7 +376,6 @@ class EnhancedTerminalUI:
         else:
             duration_str = f"{seconds}s"
 
-        # Header
         header = Text()
         header.append(f"{ds.icons.calendar} ", style=ds.colors.accent_purple)
         header.append("Session Summary", style=f"bold {ds.colors.primary_500}")
@@ -481,7 +383,6 @@ class EnhancedTerminalUI:
         self.console.rule(header, style=ds.colors.primary_500)
         self.console.print()
 
-        # Stats table
         stats_table = Table(
             show_header=False,
             border_style=ds.colors.border,
@@ -490,7 +391,6 @@ class EnhancedTerminalUI:
             expand=True
         )
 
-        # Core stats
         stats_table.add_row(
             f"[{ds.colors.text_secondary}]{ds.icons.clock} Duration[/]",
             f"[bold {ds.colors.text_primary}]{duration_str}[/]"
@@ -504,7 +404,6 @@ class EnhancedTerminalUI:
             f"[bold {ds.colors.text_primary}]{sum(self.agent_calls.values())}[/]"
         )
 
-        # Success rate
         total_ops = self.session_stats['successes'] + self.session_stats['errors']
         if total_ops > 0:
             success_rate = (self.session_stats['successes'] / total_ops) * 100
@@ -514,16 +413,14 @@ class EnhancedTerminalUI:
                 f"[bold {success_color}]{success_rate:.1f}%[/]"
             )
 
-
         self.console.print(Padding(stats_table, (0, 2)))
 
-        # Agent breakdown if available
         if self.agent_calls:
             self.console.print()
             self.console.print(f"[{ds.colors.text_secondary}]Most Used Agents:[/]")
 
             sorted_agents = sorted(self.agent_calls.items(), key=lambda x: x[1], reverse=True)
-            for agent, count in sorted_agents[:5]:  # Top 5
+            for agent, count in sorted_agents[:5]:
                 agent_name = agent.replace('_', ' ').title()
                 icon = self._get_agent_icon(agent)
                 self.console.print(f"  [{ds.colors.accent_purple}]{icon} {agent_name}[/]: [{ds.colors.accent_teal}]{count}[/]")
@@ -531,7 +428,6 @@ class EnhancedTerminalUI:
         self.console.print()
 
     def print_goodbye(self):
-        """Print beautiful goodbye message"""
         self.console.print()
 
         goodbye_text = Text()
@@ -552,15 +448,9 @@ class EnhancedTerminalUI:
         self.console.print(panel)
         self.console.print()
 
-    # ═══════════════════════════════════════════════════════════════
-    # HELP SYSTEM
-    # ═══════════════════════════════════════════════════════════════
-
     def print_help(self):
-        """Show comprehensive help overlay with keyboard shortcuts"""
         self.console.clear()
 
-        # Header
         header = Text()
         header.append(f"{ds.icons.info} ", style=ds.colors.info)
         header.append("Help & Keyboard Shortcuts", style=f"bold {ds.colors.primary_500}")
@@ -568,7 +458,6 @@ class EnhancedTerminalUI:
         self.console.rule(header, style=ds.colors.primary_500)
         self.console.print()
 
-        # Commands section
         commands_table = Table(
             title=f"[bold {ds.colors.accent_purple}]{ds.icons.gear} Available Commands[/]",
             show_header=True,
@@ -590,7 +479,6 @@ class EnhancedTerminalUI:
         self.console.print(commands_table)
         self.console.print()
 
-        # Tips section
         tips_panel = Panel(
             f"[{ds.colors.text_secondary}]{ds.icons.sparkle} Tip: Use natural language to interact with agents\n"
             f"{ds.icons.lightning} Example: \"Create a Jira ticket for the login bug and notify the team on Slack\"\n"
@@ -603,16 +491,10 @@ class EnhancedTerminalUI:
         self.console.print(tips_panel)
         self.console.print()
 
-        # Wait for user
         Prompt.ask(f"\n[{ds.colors.text_tertiary}]Press Enter to continue[/]", default="")
-
-    # ═══════════════════════════════════════════════════════════════
-    # PROGRESS & LOADING
-    # ═══════════════════════════════════════════════════════════════
 
     @contextmanager
     def show_status(self, message: str):
-        """Show animated status indicator"""
         with self.console.status(
             f"[{ds.colors.primary_500}]{message}...[/]",
             spinner="dots",
@@ -621,7 +503,6 @@ class EnhancedTerminalUI:
             yield status
 
     def show_progress(self, description: str, total: Optional[int] = None):
-        """Create beautiful progress bar for long operations"""
         return Progress(
             SpinnerColumn(spinner_name="dots", style=ds.colors.primary_500),
             TextColumn("[{task.description}]", style=ds.colors.text_secondary),
@@ -636,15 +517,10 @@ class EnhancedTerminalUI:
         )
 
     def print_divider(self, text: str = ""):
-        """Print elegant divider"""
         if text:
             self.console.rule(f"[{ds.colors.text_tertiary}]{text}[/]", style=ds.colors.border)
         else:
             self.console.print(f"[{ds.colors.border}]{'─' * 70}[/]")
 
-
-# ═══════════════════════════════════════════════════════════════
-# CONVENIENCE INSTANCE
-# ═══════════════════════════════════════════════════════════════
 
 enhanced_ui = EnhancedTerminalUI()

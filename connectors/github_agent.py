@@ -1,21 +1,4 @@
-"""
-GitHub Agent - Production-Ready Connector for GitHub Platform
-
-This module provides a robust, intelligent agent for interacting with GitHub through
-the Model Context Protocol (MCP). It enables seamless software development workflows,
-code collaboration, and project management with comprehensive error handling and retry logic.
-
-Key Features:
-- Automatic retry with exponential backoff for transient failures
-- Intelligent code navigation and repository management
-- Comprehensive error handling with context-aware messages
-- Operation tracking and statistics
-- Verbose logging for debugging
-- Development workflow best practices built-in
-
-Author: AI System
-Version: 2.0
-"""
+# GitHub Agent connector with MCP support
 
 import os
 import sys
@@ -31,7 +14,6 @@ import google.generativeai.protos as protos
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-# Add parent directory to path to import base_agent
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from connectors.base_agent import BaseAgent, safe_extract_response_text
 from connectors.agent_intelligence import (
@@ -42,18 +24,12 @@ from connectors.agent_intelligence import (
 )
 
 
-# ============================================================================
-# CONFIGURATION AND CONSTANTS
-# ============================================================================
-
 class RetryConfig:
-    """Configuration for retry logic with exponential backoff"""
     MAX_RETRIES = 3
-    INITIAL_DELAY = 1.0  # seconds
-    MAX_DELAY = 10.0     # seconds
+    INITIAL_DELAY = 1.0
+    MAX_DELAY = 10.0
     BACKOFF_FACTOR = 2.0
 
-    # Error types that should trigger a retry
     RETRYABLE_ERRORS = [
         "timeout",
         "connection",
@@ -67,7 +43,6 @@ class RetryConfig:
 
 
 class ErrorType(Enum):
-    """Classification of error types for better handling"""
     AUTHENTICATION = "authentication"
     PERMISSION = "permission"
     NOT_FOUND = "not_found"
@@ -81,7 +56,6 @@ class ErrorType(Enum):
 
 @dataclass
 class OperationStats:
-    """Track statistics for agent operations"""
     total_operations: int = 0
     successful_operations: int = 0
     failed_operations: int = 0
@@ -89,7 +63,6 @@ class OperationStats:
     tools_called: Dict[str, int] = field(default_factory=dict)
 
     def record_operation(self, tool_name: str, success: bool, retry_count: int = 0):
-        """Record an operation for statistics tracking"""
         self.total_operations += 1
         self.tools_called[tool_name] = self.tools_called.get(tool_name, 0) + 1
 
@@ -101,7 +74,6 @@ class OperationStats:
         self.retries += retry_count
 
     def get_summary(self) -> str:
-        """Get a human-readable summary of operations"""
         success_rate = (self.successful_operations / self.total_operations * 100) if self.total_operations > 0 else 0
         return (
             f"Operations: {self.total_operations} total, "
@@ -112,29 +84,7 @@ class OperationStats:
         )
 
 
-# ============================================================================
-# MAIN AGENT CLASS
-# ============================================================================
-
 class Agent(BaseAgent):
-    """
-    Specialized agent for GitHub operations via MCP
-
-    This agent provides intelligent, reliable interaction with GitHub through:
-    - Repository and code navigation
-    - Issue and pull request management
-    - Development workflow automation
-    - Automatic retry for transient failures
-    - Comprehensive error handling and reporting
-    - Operation tracking and statistics
-
-    Usage:
-        agent = Agent(verbose=True)
-        await agent.initialize()
-        result = await agent.execute("Create an issue for the login bug")
-        await agent.cleanup()
-    """
-
     def __init__(
         self,
         verbose: bool = False,
@@ -142,43 +92,27 @@ class Agent(BaseAgent):
         knowledge_base: Optional[WorkspaceKnowledge] = None,
         session_logger=None
     ):
-        """
-        Initialize the GitHub agent
-
-        Args:
-            verbose: Enable detailed logging for debugging (default: False)
-            shared_context: Optional shared context for cross-agent coordination
-            knowledge_base: Optional workspace knowledge base
-            session_logger: Optional session logger for tracking operations
-        """
         super().__init__()
 
-        # MCP Connection Components
         self.session: ClientSession = None
-        self.session_entered = False  # Track if session.__aenter__() succeeded
+        self.session_entered = False
         self.stdio_context = None
-        self.stdio_context_entered = False  # Track if stdio_context.__aenter__() succeeded
+        self.stdio_context_entered = False
         self.model = None
         self.available_tools = []
 
-        # Configuration
         self.verbose = verbose
         self.stats = OperationStats()
 
-        # Session logging
         self.logger = session_logger
         self.agent_name = "github"
 
-        # Intelligence Components
         self.memory = ConversationMemory()
         self.knowledge = knowledge_base or WorkspaceKnowledge()
         self.shared_context = shared_context
         self.proactive = ProactiveAssistant('github', verbose)
 
-        # Feature #1: Metadata Cache for faster operations
         self.metadata_cache = {}
-
-        # Schema type mapping for Gemini
         self.schema_type_map = {
             "string": protos.Type.STRING,
             "number": protos.Type.NUMBER,
@@ -188,15 +122,9 @@ class Agent(BaseAgent):
             "array": protos.Type.ARRAY,
         }
 
-        # System prompt - defines agent behavior and intelligence
         self.system_prompt = self._build_system_prompt()
 
-    # ========================================================================
-    # SYSTEM PROMPT - Agent Intelligence and Behavior
-    # ========================================================================
-
     def _build_system_prompt(self) -> str:
-        """Build the comprehensive system prompt that defines agent behavior"""
         return """You are an elite software development workflow specialist with deep expertise in version control, collaborative coding, code review, and engineering processes. Your mission is to help developers navigate repositories, manage issues and pull requests, coordinate development work, and maintain high-quality codebases through GitHub.
 
 # Your Capabilities
@@ -935,23 +863,11 @@ If you answer "no" to ANY of these, STOP and report the error instead.
 
 Remember: GitHub is where the world builds software. Every issue you create, every PR you review, every commit you make contributes to a project's success and the team's productivity. Treat code and collaboration with the professionalism and excellence they deserve."""
 
-    # ========================================================================
-    # INITIALIZATION AND CONNECTION
-    # ========================================================================
-
     async def initialize(self):
-        """
-        Connect to GitHub MCP server
-
-        Raises:
-            ValueError: If required environment variables are missing
-            RuntimeError: If connection or initialization fails
-        """
         try:
             if self.verbose:
                 print(f"[GITHUB AGENT] Initializing connection to GitHub MCP server")
 
-            # GitHub token should be in environment
             github_token = os.environ.get("GITHUB_PERSONAL_ACCESS_TOKEN") or os.environ.get("GITHUB_TOKEN")
 
             if not github_token:
@@ -964,13 +880,11 @@ Remember: GitHub is where the world builds software. Every issue you create, eve
                     "4. Set the token in your environment"
                 )
 
-            # Prepare environment variables to suppress debug output when not in verbose mode
             env_vars = {
                 **os.environ,
                 "GITHUB_PERSONAL_ACCESS_TOKEN": github_token
             }
             if not self.verbose:
-                # Suppress debug output from MCP server
                 env_vars["DEBUG"] = ""
                 env_vars["NODE_ENV"] = "production"
 
@@ -983,26 +897,22 @@ Remember: GitHub is where the world builds software. Every issue you create, eve
             try:
                 self.stdio_context = stdio_client(server_params)
                 stdio, write = await self.stdio_context.__aenter__()
-                self.stdio_context_entered = True  # Mark as successfully entered
+                self.stdio_context_entered = True
 
                 self.session = ClientSession(stdio, write)
                 await self.session.__aenter__()
-                self.session_entered = True  # Mark as successfully entered
+                self.session_entered = True
 
                 await self.session.initialize()
             except Exception as e:
-                # If connection fails, ensure we clean up partial state
                 await self._cleanup_connection()
                 raise
 
-            # Load tools
             tools_list = await self.session.list_tools()
             self.available_tools = tools_list.tools
 
-            # Convert to Gemini format
             gemini_tools = [self._build_function_declaration(tool) for tool in self.available_tools]
 
-            # Create model
             self.model = genai.GenerativeModel(
                 'models/gemini-2.5-flash',
                 system_instruction=self.system_prompt,
@@ -1011,7 +921,6 @@ Remember: GitHub is where the world builds software. Every issue you create, eve
 
             self.initialized = True
 
-            # Feature #1: Prefetch repository metadata for faster operations
             await self._prefetch_metadata()
 
             if self.verbose:
@@ -1028,16 +937,7 @@ Remember: GitHub is where the world builds software. Every issue you create, eve
             )
 
     async def _prefetch_metadata(self):
-        """
-        Prefetch and cache GitHub metadata for faster operations (Feature #1)
-
-        Fetches accessible repositories, labels, and collaborators at initialization
-        time to avoid discovery overhead on every operation.
-
-        Cache is persisted to knowledge base with a 1-hour TTL.
-        """
         try:
-            # Check if we have valid cached metadata
             cached = self.knowledge.get_metadata_cache('github')
             if cached:
                 self.metadata_cache = cached
@@ -1048,39 +948,32 @@ Remember: GitHub is where the world builds software. Every issue you create, eve
             if self.verbose:
                 print(f"[GITHUB AGENT] Prefetching metadata...")
 
-            # Fetch accessible repositories (limit to avoid huge lists)
             repositories = await self._fetch_accessible_repos()
 
-            # Fetch labels for top repos (limit to avoid too many calls)
-            for repo_full_name in list(repositories.keys())[:5]:  # Top 5 repos only
+            for repo_full_name in list(repositories.keys())[:5]:
                 try:
                     repositories[repo_full_name]['labels'] = await self._fetch_repo_labels(repo_full_name)
                 except Exception as e:
                     if self.verbose:
                         print(f"[GITHUB AGENT] Warning: Could not fetch labels for {repo_full_name}: {e}")
 
-            # Store in cache
             self.metadata_cache = {
                 'repositories': repositories,
                 'fetched_at': asyncio.get_event_loop().time()
             }
 
-            # Persist to knowledge base
             self.knowledge.save_metadata_cache('github', self.metadata_cache, ttl_seconds=3600)
 
             if self.verbose:
                 print(f"[GITHUB AGENT] Cached metadata for {len(repositories)} repositories")
 
         except Exception as e:
-            # Graceful degradation: If prefetch fails, continue without cache
             if self.verbose:
                 print(f"[GITHUB AGENT] Warning: Metadata prefetch failed: {e}")
             print(f"[GITHUB AGENT] Continuing without metadata cache (operations may be slower)")
 
     async def _fetch_accessible_repos(self) -> Dict:
-        """Fetch accessible repositories"""
         try:
-            # Use GitHub MCP tool to list repos
             result = await self.session.call_tool("github_list_repos", {})
 
             repositories = {}
@@ -1089,7 +982,6 @@ Remember: GitHub is where the world builds software. Every issue you create, eve
                 data = json.loads(content) if isinstance(content, str) else content
 
                 if isinstance(data, list):
-                    # Limit to first 20 repos to avoid huge cache
                     for repo in data[:20]:
                         full_name = repo.get('full_name', '')
                         if full_name:
@@ -1108,7 +1000,6 @@ Remember: GitHub is where the world builds software. Every issue you create, eve
             return {}
 
     async def _fetch_repo_labels(self, repo_full_name: str) -> List[str]:
-        """Fetch labels for a repository"""
         try:
             owner, repo = repo_full_name.split('/', 1)
             result = await self.session.call_tool("github_list_labels", {
@@ -1128,33 +1019,24 @@ Remember: GitHub is where the world builds software. Every issue you create, eve
         except:
             return []
 
-    # ========================================================================
-    # CORE EXECUTION ENGINE
-    # ========================================================================
-
     async def execute(self, instruction: str) -> str:
-        """Execute a GitHub task with enhanced error handling and retry logic"""
         if not self.initialized:
             return self._format_error(Exception("GitHub agent not initialized. Please restart the system."))
 
         try:
-            # Step 1: Resolve ambiguous references using conversation memory
             resolved_instruction = self._resolve_references(instruction)
 
             if resolved_instruction != instruction and self.verbose:
                 print(f"[GITHUB AGENT] Resolved instruction: {resolved_instruction}")
 
-            # Step 2: Check for resources from other agents
             context_from_other_agents = self._get_cross_agent_context()
             if context_from_other_agents and self.verbose:
                 print(f"[GITHUB AGENT] Found context from other agents")
 
-            # Use resolved instruction for the rest
             instruction = resolved_instruction
             chat = self.model.start_chat()
             response = await chat.send_message_async(instruction)
 
-            # Handle function calling loop with retry logic
             max_iterations = 15
             iteration = 0
             actions_taken = []
@@ -1170,13 +1052,11 @@ Remember: GitHub is where the world builds software. Every issue you create, eve
 
                 actions_taken.append(tool_name)
 
-                # Execute tool with retry logic
                 result_text, error_msg = await self._execute_tool_with_retry(
                     tool_name,
                     tool_args
                 )
 
-                # Send result back to LLM
                 response = await self._send_function_response(
                     chat,
                     tool_name,
@@ -1197,8 +1077,6 @@ Remember: GitHub is where the world builds software. Every issue you create, eve
             if self.verbose:
                 print(f"\n[GITHUB AGENT] Execution complete. {self.stats.get_summary()}")
 
-            
-            # Remember resources and add proactive suggestions
             self._remember_created_resources(final_response, instruction)
 
             operation_type = self._infer_operation_type(instruction)
@@ -1213,7 +1091,6 @@ Remember: GitHub is where the world builds software. Every issue you create, eve
             return self._format_error(e)
 
     def _resolve_references(self, instruction: str) -> str:
-        """Resolve ambiguous references like 'it', 'that', 'this' using conversation memory"""
         ambiguous_terms = ['it', 'that', 'this', 'the issue', 'the pr', 'the pull request', 'the repository', 'the repo']
 
         for term in ambiguous_terms:
@@ -1229,11 +1106,9 @@ Remember: GitHub is where the world builds software. Every issue you create, eve
         return instruction
 
     def _get_cross_agent_context(self) -> str:
-        """Get context from other agents"""
         if not self.shared_context:
             return ""
 
-        # Get only recent resources to avoid overwhelming context (limit to 5 most recent)
         recent_resources = self.shared_context.get_recent_resources(limit=5)
         if not recent_resources:
             return ""
@@ -1248,10 +1123,8 @@ Remember: GitHub is where the world builds software. Every issue you create, eve
         return "; ".join(context_parts) if context_parts else ""
 
     def _remember_created_resources(self, response: str, instruction: str):
-        """Extract and remember created resources from response"""
         import re
 
-        # Pattern to match GitHub issue/PR numbers (e.g., #123)
         issue_pattern = r'#(\d+)'
         matches = re.findall(issue_pattern, response)
 
@@ -1276,7 +1149,6 @@ Remember: GitHub is where the world builds software. Every issue you create, eve
                 )
 
     def _infer_operation_type(self, instruction: str) -> str:
-        """Infer what type of operation was performed"""
         instruction_lower = instruction.lower()
 
         if 'create' in instruction_lower or 'new' in instruction_lower:
@@ -1295,7 +1167,6 @@ Remember: GitHub is where the world builds software. Every issue you create, eve
             return 'unknown'
 
     def _extract_function_call(self, response) -> Optional[Any]:
-        """Extract function call from LLM response"""
         parts = response.candidates[0].content.parts
         has_function_call = any(
             hasattr(part, 'function_call') and part.function_call
@@ -1316,7 +1187,6 @@ Remember: GitHub is where the world builds software. Every issue you create, eve
         tool_name: str,
         tool_args: Dict
     ) -> Tuple[Optional[str], Optional[str]]:
-        """Execute a tool with automatic retry on transient failures"""
         retry_count = 0
         delay = RetryConfig.INITIAL_DELAY
 

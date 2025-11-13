@@ -1,22 +1,4 @@
-"""
-Jira Agent - Production-Ready Connector for Atlassian Jira
-
-This module provides a robust, intelligent agent for interacting with Jira through
-the Model Context Protocol (MCP). It uses the sooperset/mcp-atlassian Docker image
-for reliable connectivity and includes comprehensive error handling, retry logic,
-and verification workflows.
-
-Key Features:
-- Automatic retry with exponential backoff for transient failures
-- Verification of all state-changing operations
-- Comprehensive error handling with context-aware messages
-- Operation tracking and statistics
-- Verbose logging for debugging
-- Smart result validation and parsing
-
-Author: AI System
-Version: 2.0
-"""
+# Jira agent connector using MCP with Docker integration
 
 import os
 import sys
@@ -43,18 +25,12 @@ from connectors.agent_intelligence import (
 )
 
 
-# ============================================================================
-# CONFIGURATION AND CONSTANTS
-# ============================================================================
-
 class RetryConfig:
-    """Configuration for retry logic with exponential backoff"""
+    # Retry configuration with exponential backoff
     MAX_RETRIES = 3
-    INITIAL_DELAY = 1.0  # seconds
-    MAX_DELAY = 10.0     # seconds
+    INITIAL_DELAY = 1.0
+    MAX_DELAY = 10.0
     BACKOFF_FACTOR = 2.0
-
-    # Error types that should trigger a retry
     RETRYABLE_ERRORS = [
         "timeout",
         "connection",
@@ -68,7 +44,7 @@ class RetryConfig:
 
 
 class ErrorType(Enum):
-    """Classification of error types for better handling"""
+    # Error type classification
     AUTHENTICATION = "authentication"
     PERMISSION = "permission"
     NOT_FOUND = "not_found"
@@ -80,7 +56,7 @@ class ErrorType(Enum):
 
 @dataclass
 class OperationStats:
-    """Track statistics for agent operations"""
+    # Track statistics for agent operations
     total_operations: int = 0
     successful_operations: int = 0
     failed_operations: int = 0
@@ -89,7 +65,7 @@ class OperationStats:
     tools_called: Dict[str, int] = field(default_factory=dict)
 
     def record_operation(self, tool_name: str, success: bool, retry_count: int = 0):
-        """Record an operation for statistics tracking"""
+        # Record operation statistics
         self.total_operations += 1
         self.tools_called[tool_name] = self.tools_called.get(tool_name, 0) + 1
 
@@ -101,7 +77,7 @@ class OperationStats:
         self.retries += retry_count
 
     def get_summary(self) -> str:
-        """Get a human-readable summary of operations"""
+        # Get human-readable summary
         success_rate = (self.successful_operations / self.total_operations * 100) if self.total_operations > 0 else 0
         return (
             f"Operations: {self.total_operations} total, "
@@ -112,26 +88,8 @@ class OperationStats:
         )
 
 
-# ============================================================================
-# MAIN AGENT CLASS
-# ============================================================================
-
 class Agent(BaseAgent):
-    """
-    Specialized agent for Jira operations via MCP using sooperset/mcp-atlassian
-
-    This agent provides intelligent, reliable interaction with Jira through:
-    - Automatic verification of state-changing operations
-    - Retry logic for transient failures
-    - Comprehensive error handling and reporting
-    - Operation tracking and statistics
-
-    Usage:
-        agent = Agent(verbose=True)
-        await agent.initialize()
-        result = await agent.execute("Mark issue KAN-1 as Done")
-        await agent.cleanup()
-    """
+    # Specialized agent for Jira operations via MCP
 
     def __init__(
         self,
@@ -141,43 +99,29 @@ class Agent(BaseAgent):
     ,
         session_logger=None
     ):
-        """
-        Initialize the Jira agent
-
-        Args:
-            verbose: Enable detailed logging for debugging (default: False)
-            shared_context: Shared context for cross-agent coordination (optional)
-            knowledge_base: Workspace knowledge base for learning (optional)
-                    session_logger: Optional session logger for tracking operations
-        """
+        # Initialize the Jira agent
         super().__init__()
 
-        # Session logging
         self.logger = session_logger
         self.agent_name = "jira"
 
-        # MCP Connection Components
         self.session: ClientSession = None
-        self.session_entered = False  # Track if session.__aenter__() succeeded
+        self.session_entered = False
         self.stdio_context = None
-        self.stdio_context_entered = False  # Track if stdio_context.__aenter__() succeeded
+        self.stdio_context_entered = False
         self.model = None
         self.available_tools = []
 
-        # Configuration
         self.verbose = verbose
         self.stats = OperationStats()
 
-        # Intelligence Components
         self.memory = ConversationMemory()
         self.knowledge = knowledge_base or WorkspaceKnowledge()
         self.shared_context = shared_context
         self.proactive = ProactiveAssistant('jira', verbose)
 
-        # Feature #1: Metadata Cache for faster operations
         self.metadata_cache = {}
 
-        # Schema type mapping for Gemini
         self.schema_type_map = {
             "string": protos.Type.STRING,
             "number": protos.Type.NUMBER,
@@ -187,20 +131,10 @@ class Agent(BaseAgent):
             "array": protos.Type.ARRAY,
         }
 
-        # System prompt - defines agent behavior and intelligence
         self.system_prompt = self._build_system_prompt()
 
-    # ========================================================================
-    # SYSTEM PROMPT - Agent Intelligence and Behavior
-    # ========================================================================
-
     def _build_system_prompt(self) -> str:
-        """
-        Build the comprehensive system prompt that defines agent behavior
-
-        This prompt is the core of the agent's intelligence, defining how it
-        should think, act, and respond to user requests.
-        """
+        # Build system prompt defining agent behavior
         return """You are a specialized Jira agent with deep expertise in project management, issue tracking, and Atlassian workflows. Your purpose is to help users efficiently manage their work in Jira through intelligent automation and precise execution.
 
 # Your Capabilities
@@ -418,43 +352,19 @@ Common request patterns and how to handle them:
 
 Remember: You're not just executing commands—you're helping users manage their work more effectively. Think about what they're trying to accomplish, execute it reliably, verify it succeeded, and help them get there efficiently."""
 
-    # ========================================================================
-    # INITIALIZATION AND CONNECTION
-    # ========================================================================
-
     async def initialize(self):
-        """
-        Connect to the Jira MCP server using sooperset/mcp-atlassian
-
-        This method establishes the connection to Jira through Docker and
-        initializes the AI model with available tools.
-
-        Raises:
-            ValueError: If required environment variables are missing
-            RuntimeError: If connection or initialization fails
-        """
+        # Connect to Jira MCP server and initialize model
         try:
-            # Validate environment variables
             jira_url, jira_username, jira_api_token = self._get_credentials()
 
             if self.verbose:
                 print(f"[JIRA AGENT] Initializing connection to {jira_url}")
 
-            # Configure Docker-based MCP server
             server_params = self._create_server_params(jira_url, jira_username, jira_api_token)
-
-            # Establish MCP connection
             await self._connect_to_mcp(server_params)
-
-            # Load available tools from server
             await self._load_tools()
-
-            # Initialize AI model
             self._initialize_model()
-
             self.initialized = True
-
-            # Feature #1: Prefetch project metadata for faster operations
             await self._prefetch_metadata()
 
             if self.verbose:
@@ -470,15 +380,7 @@ Remember: You're not just executing commands—you're helping users manage their
             )
 
     def _get_credentials(self) -> Tuple[str, str, str]:
-        """
-        Retrieve and validate Jira credentials from environment
-
-        Returns:
-            Tuple of (jira_url, jira_username, jira_api_token)
-
-        Raises:
-            ValueError: If any required credentials are missing
-        """
+        # Get Jira credentials from environment
         jira_url = os.environ.get("JIRA_URL")
         jira_username = os.environ.get("JIRA_USERNAME")
         jira_api_token = os.environ.get("JIRA_API_TOKEN")
@@ -497,24 +399,12 @@ Remember: You're not just executing commands—you're helping users manage their
                 "4. Set it in your environment"
             )
 
-        # Clean up URL
         jira_url = jira_url.rstrip('/')
 
         return jira_url, jira_username, jira_api_token
 
     def _create_server_params(self, jira_url: str, jira_username: str, jira_api_token: str) -> StdioServerParameters:
-        """
-        Create MCP server parameters for Docker connection
-
-        Args:
-            jira_url: Full Jira instance URL
-            jira_username: Atlassian account email
-            jira_api_token: Jira API token
-
-        Returns:
-            Configured StdioServerParameters for Docker
-                    session_logger: Optional session logger for tracking operations
-        """
+        # Create MCP server parameters for Docker
         return StdioServerParameters(
             command="docker",
             args=[
@@ -533,35 +423,23 @@ Remember: You're not just executing commands—you're helping users manage their
         )
 
     async def _connect_to_mcp(self, server_params: StdioServerParameters):
-        """
-        Establish connection to MCP server
-
-        Args:
-            server_params: Server configuration parameters
-                    session_logger: Optional session logger for tracking operations
-        """
+        # Establish connection to MCP server
         try:
             self.stdio_context = stdio_client(server_params)
             stdio, write = await self.stdio_context.__aenter__()
-            self.stdio_context_entered = True  # Mark as successfully entered
+            self.stdio_context_entered = True
 
             self.session = ClientSession(stdio, write)
             await self.session.__aenter__()
-            self.session_entered = True  # Mark as successfully entered
+            self.session_entered = True
 
             await self.session.initialize()
         except Exception as e:
-            # If connection fails, ensure we clean up partial state
             await self._cleanup_connection()
             raise
 
     async def _load_tools(self):
-        """
-        Load available tools from MCP server
-
-        Raises:
-            RuntimeError: If no tools are available
-        """
+        # Load available tools from MCP server
         tools_list = await self.session.list_tools()
         self.available_tools = tools_list.tools
 
@@ -569,13 +447,8 @@ Remember: You're not just executing commands—you're helping users manage their
             raise RuntimeError("No tools available from Atlassian MCP server")
 
     def _initialize_model(self):
-        """
-        Initialize the Gemini AI model with available tools
-        """
-        # Convert MCP tools to Gemini format
+        # Initialize Gemini AI model with tools
         gemini_tools = [self._build_function_declaration(tool) for tool in self.available_tools]
-
-        # Create model with configuration
         self.model = genai.GenerativeModel(
             'models/gemini-2.5-flash',
             system_instruction=self.system_prompt,
@@ -583,12 +456,7 @@ Remember: You're not just executing commands—you're helping users manage their
         )
 
     def _get_troubleshooting_guide(self) -> List[str]:
-        """
-        Get troubleshooting steps for initialization failures
-
-        Returns:
-            List of troubleshooting steps
-        """
+        # Get troubleshooting steps for initialization
         return [
             "\nTroubleshooting steps:",
             "1. Ensure Docker is installed and running:",
@@ -611,16 +479,8 @@ Remember: You're not just executing commands—you're helping users manage their
         ]
 
     async def _prefetch_metadata(self):
-        """
-        Prefetch and cache Jira metadata for faster operations (Feature #1)
-
-        This method fetches project metadata, issue types, fields, etc. at
-        initialization time to avoid discovery overhead on every operation.
-
-        The cache is persisted to the knowledge base with a 1-hour TTL.
-        """
+        # Prefetch Jira metadata for caching
         try:
-            # Check if we have valid cached metadata
             cached = self.knowledge.get_metadata_cache('jira')
             if cached:
                 self.metadata_cache = cached
@@ -631,11 +491,9 @@ Remember: You're not just executing commands—you're helping users manage their
             if self.verbose:
                 print(f"[JIRA AGENT] Prefetching metadata...")
 
-            # Fetch all projects
             projects = await self._fetch_all_projects()
 
-            # Fetch issue types and fields for each project
-            for project_key in list(projects.keys())[:10]:  # Limit to 10 projects for speed
+            for project_key in list(projects.keys())[:10]:
                 try:
                     projects[project_key]['issue_types'] = await self._fetch_project_issue_types(project_key)
                     projects[project_key]['fields'] = await self._fetch_project_fields(project_key)
@@ -643,28 +501,24 @@ Remember: You're not just executing commands—you're helping users manage their
                     if self.verbose:
                         print(f"[JIRA AGENT] Warning: Could not fetch metadata for {project_key}: {e}")
 
-            # Store in cache
             self.metadata_cache = {
                 'projects': projects,
                 'fetched_at': asyncio.get_event_loop().time()
             }
 
-            # Persist to knowledge base
             self.knowledge.save_metadata_cache('jira', self.metadata_cache, ttl_seconds=3600)
 
             if self.verbose:
                 print(f"[JIRA AGENT] Cached metadata for {len(projects)} projects")
 
         except Exception as e:
-            # Graceful degradation: If prefetch fails, continue without cache
             if self.verbose:
                 print(f"[JIRA AGENT] Warning: Metadata prefetch failed: {e}")
             print(f"[JIRA AGENT] Continuing without metadata cache (operations may be slower)")
 
     async def _fetch_all_projects(self) -> Dict:
-        """Fetch all accessible projects"""
+        # Fetch all accessible projects
         try:
-            # Use MCP tool to get projects
             result = await self.session.call_tool("jira_get_projects", {})
 
             projects = {}
@@ -686,7 +540,7 @@ Remember: You're not just executing commands—you're helping users manage their
             return {}
 
     async def _fetch_project_issue_types(self, project_key: str) -> List[str]:
-        """Fetch available issue types for a project"""
+        # Fetch available issue types for project
         try:
             result = await self.session.call_tool("jira_get_issue_types", {"project": project_key})
 
@@ -702,84 +556,51 @@ Remember: You're not just executing commands—you're helping users manage their
             return []
 
     async def _fetch_project_fields(self, project_key: str) -> Dict:
-        """Fetch custom fields for a project"""
-        # Simplified - just return empty for now as this can be heavy
+        # Fetch custom fields for project
         return {}
 
-    # ========================================================================
-    # CORE EXECUTION ENGINE
-    # ========================================================================
-
     async def execute(self, instruction: str) -> str:
-        """
-        Execute a Jira task with enhanced error handling and verification
-
-        This is the main entry point for task execution. It handles:
-        - Conversation memory and context resolution
-        - LLM-based instruction interpretation
-        - Tool calling loop with retry logic
-        - Result validation and verification
-        - Comprehensive error handling
-        - Proactive suggestions
-        - Cross-agent resource sharing
-
-        Args:
-            instruction: Natural language instruction for the agent
-
-        Returns:
-            Natural language response with results
-                    session_logger: Optional session logger for tracking operations
-        """
+        # Execute Jira task with error handling
         if not self.initialized:
             return self._format_error(Exception("Jira agent not initialized. Please restart the system."))
 
         try:
-            # Step 1: Resolve ambiguous references using conversation memory
             resolved_instruction = self._resolve_references(instruction)
 
             if resolved_instruction != instruction and self.verbose:
                 print(f"[JIRA AGENT] Resolved instruction: {resolved_instruction}")
 
-            # Step 2: Check for resources from other agents
             context_from_other_agents = self._get_cross_agent_context()
             if context_from_other_agents and self.verbose:
                 print(f"[JIRA AGENT] Found context from other agents: {len(context_from_other_agents)} resources")
 
-            # Step 3: Start conversation with LLM
             chat = self.model.start_chat()
 
-            # Enhance instruction with cross-agent context if available
             if context_from_other_agents:
                 resolved_instruction += f"\n\n[Additional context from other agents: {context_from_other_agents}]"
 
             response = await chat.send_message_async(resolved_instruction)
 
-            # Handle function calling loop with retry logic
-            max_iterations = 15  # Increased for verification steps
+            max_iterations = 15
             iteration = 0
             actions_taken = []
 
             while iteration < max_iterations:
-                # Check if LLM wants to call a tool
                 function_call = self._extract_function_call(response)
 
                 if not function_call:
-                    # No more function calls, we're done
                     break
 
                 tool_name = function_call.name
                 tool_args = self._deep_convert_proto_args(function_call.args)
 
-                # Track action for debugging
                 actions_taken.append(tool_name)
 
-                # Execute tool with retry logic
                 result_text, error_msg = await self._execute_tool_with_retry(
                     tool_name,
                     tool_args
                 )
 
-                # Send result back to LLM
                 response = await self._send_function_response(
                     chat,
                     tool_name,
@@ -789,7 +610,6 @@ Remember: You're not just executing commands—you're helping users manage their
 
                 iteration += 1
 
-            # Check if we hit iteration limit
             if iteration >= max_iterations:
                 return (
                     f"{safe_extract_response_text(response)}\n\n"
@@ -797,11 +617,9 @@ Remember: You're not just executing commands—you're helping users manage their
                     "Consider breaking this into smaller requests."
                 )
 
-            # Step 4: Extract and remember created resources
             final_response = safe_extract_response_text(response)
             self._remember_created_resources(final_response, resolved_instruction)
 
-            # Step 5: Add proactive suggestions
             operation_type = self._infer_operation_type(resolved_instruction)
             context = {'instruction': resolved_instruction, 'response': final_response}
             suggestions = self.proactive.suggest_next_steps(operation_type, context)
@@ -818,30 +636,14 @@ Remember: You're not just executing commands—you're helping users manage their
         except Exception as e:
             return self._format_error(e)
 
-    # ========================================================================
-    # INTELLIGENCE HELPER METHODS
-    # ========================================================================
-
     def _resolve_references(self, instruction: str) -> str:
-        """
-        Resolve ambiguous references like 'it', 'that', 'this' using conversation memory
-
-        Args:
-            instruction: Original instruction
-
-        Returns:
-            Instruction with references resolved
-                    session_logger: Optional session logger for tracking operations
-        """
-        # Check for common ambiguous terms
+        # Resolve ambiguous references using memory
         ambiguous_terms = ['it', 'that', 'this', 'the issue', 'the ticket']
 
         for term in ambiguous_terms:
             if term in instruction.lower():
-                # Try to resolve from conversation memory
                 reference = self.memory.resolve_reference(term)
                 if reference:
-                    # Replace term with actual reference
                     instruction = instruction.replace(term, reference)
                     instruction = instruction.replace(term.capitalize(), reference)
                     if self.verbose:
@@ -851,25 +653,18 @@ Remember: You're not just executing commands—you're helping users manage their
         return instruction
 
     def _get_cross_agent_context(self) -> str:
-        """
-        Get context from other agents (GitHub issues, etc.)
-
-        Returns:
-            Formatted context string
-        """
+        # Get context from other agents
         if not self.shared_context:
             return ""
 
-        # Get only recent resources to avoid overwhelming context (limit to 5 most recent)
         recent_resources = self.shared_context.get_recent_resources(limit=5)
 
         if not recent_resources:
             return ""
 
-        # Format context for LLM
         context_parts = []
         for resource in recent_resources:
-            if resource['agent'] != 'jira':  # Only include other agents
+            if resource['agent'] != 'jira':
                 context_parts.append(
                     f"{resource['agent'].capitalize()} {resource['type']}: {resource['id']} ({resource['url']})"
                 )
@@ -877,37 +672,24 @@ Remember: You're not just executing commands—you're helping users manage their
         return "; ".join(context_parts) if context_parts else ""
 
     def _remember_created_resources(self, response: str, instruction: str):
-        """
-        Extract and remember created resources from response
-
-        Args:
-            response: LLM response text
-            instruction: Original instruction
-                    session_logger: Optional session logger for tracking operations
-        """
+        # Extract and remember created resources from response
         import re
 
-        # Pattern to match Jira issue keys (e.g., KAN-123, PROJ-456)
         issue_pattern = r'\b([A-Z][A-Z0-9]+-\d+)\b'
         matches = re.findall(issue_pattern, response)
 
         if matches:
-            # Remember the most recently mentioned issue
-            issue_key = matches[-1]  # Last mentioned is likely the one created/modified
+            issue_key = matches[-1]
 
-            # Determine operation type
             operation_type = 'create_issue' if 'creat' in instruction.lower() else 'update_issue'
 
-            # Remember in conversation memory
             self.memory.remember(
                 operation_type,
                 issue_key,
                 {'instruction': instruction[:100]}
             )
 
-            # Share with other agents if shared context available
             if self.shared_context:
-                # Extract Jira URL from environment
                 jira_url = os.environ.get('JIRA_URL', 'https://your-domain.atlassian.net')
                 issue_url = f"{jira_url}/browse/{issue_key}"
 
@@ -923,16 +705,7 @@ Remember: You're not just executing commands—you're helping users manage their
                     print(f"[JIRA AGENT] Shared {issue_key} with other agents")
 
     def _infer_operation_type(self, instruction: str) -> str:
-        """
-        Infer what type of operation was performed
-
-        Args:
-            instruction: The instruction that was executed
-
-        Returns:
-            Operation type string
-                    session_logger: Optional session logger for tracking operations
-        """
+        # Infer operation type from instruction
         instruction_lower = instruction.lower()
 
         if 'create' in instruction_lower or 'new' in instruction_lower:
@@ -949,16 +722,7 @@ Remember: You're not just executing commands—you're helping users manage their
             return 'unknown'
 
     def _extract_function_call(self, response) -> Optional[Any]:
-        """
-        Extract function call from LLM response
-
-        Args:
-            response: LLM response object
-
-        Returns:
-            Function call object or None if no call present
-                    session_logger: Optional session logger for tracking operations
-        """
+        # Extract function call from LLM response
         parts = response.candidates[0].content.parts
         has_function_call = any(
             hasattr(part, 'function_call') and part.function_call
@@ -968,7 +732,6 @@ Remember: You're not just executing commands—you're helping users manage their
         if not has_function_call:
             return None
 
-        # Find and return the function call
         for part in parts:
             if hasattr(part, 'function_call') and part.function_call:
                 return part.function_call
@@ -980,17 +743,7 @@ Remember: You're not just executing commands—you're helping users manage their
         tool_name: str,
         tool_args: Dict
     ) -> Tuple[Optional[str], Optional[str]]:
-        """
-        Execute a tool with automatic retry on transient failures
-
-        Args:
-            tool_name: Name of the tool to call
-            tool_args: Arguments for the tool
-
-        Returns:
-            Tuple of (result_text, error_message). One will be None.
-                    session_logger: Optional session logger for tracking operations
-        """
+        # Execute tool with automatic retry on failures
         retry_count = 0
         delay = RetryConfig.INITIAL_DELAY
 

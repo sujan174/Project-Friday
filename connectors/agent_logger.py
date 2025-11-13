@@ -1,17 +1,4 @@
-"""
-Agent Logger - Session-Based Logging System
-
-Provides comprehensive logging for agent operations with:
-- Session-based file logging (one file per session, rewritten each time)
-- Message tracking between orchestrator and agents
-- Token consumption metrics
-- Tool call tracking
-- ASCII visualization of agent interactions
-- Condensed but informative output
-
-Author: AI System
-Version: 1.0
-"""
+"""Agent Logger - Session-Based Logging System"""
 
 import os
 import json
@@ -37,9 +24,9 @@ class ToolCall:
 class MessageLog:
     """Record of a message between orchestrator and agent"""
     timestamp: float
-    direction: str  # "to_agent" or "from_agent"
+    direction: str
     agent_name: str
-    message_preview: str  # First 100 chars
+    message_preview: str
     message_length: int
     has_function_calls: bool = False
     function_call_count: int = 0
@@ -60,40 +47,24 @@ class AgentMetrics:
 
 
 class SessionLogger:
-    """
-    Main session logger for agent operations
-
-    Creates a fresh log file for each session with condensed,
-    informative logging of all agent interactions.
-    """
+    """Main session logger for agent operations"""
 
     def __init__(self, log_dir: str = "logs", session_id: Optional[str] = None):
-        """
-        Initialize session logger
-
-        Args:
-            log_dir: Directory to store log files
-            session_id: Optional session ID (generates one if not provided)
-        """
         self.log_dir = Path(log_dir)
         self.log_dir.mkdir(exist_ok=True)
 
         self.session_id = session_id or datetime.now().strftime("%Y%m%d_%H%M%S")
         self.session_start = time.time()
 
-        # Log file path - one per session, overwrites on restart
         self.log_file = self.log_dir / f"session_{self.session_id}.log"
 
-        # Metrics tracking
         self.agent_metrics: Dict[str, AgentMetrics] = {}
         self.message_log: List[MessageLog] = []
-        self.total_tokens: Dict[str, int] = defaultdict(int)  # agent_name -> tokens
+        self.total_tokens: Dict[str, int] = defaultdict(int)
 
-        # Initialize log file
         self._initialize_log_file()
 
     def _initialize_log_file(self):
-        """Initialize the log file with session header"""
         with open(self.log_file, 'w', encoding='utf-8') as f:
             f.write("=" * 80 + "\n")
             f.write("AGENT SESSION LOG\n")
@@ -110,20 +81,9 @@ class SessionLogger:
         has_function_calls: bool = False,
         function_call_count: int = 0
     ):
-        """
-        Log a message sent to an agent
-
-        Args:
-            agent_name: Name of the agent receiving the message
-            message: The message content
-            has_function_calls: Whether message contains function calls
-            function_call_count: Number of function calls in message
-        """
-        # Ensure agent exists in metrics
         if agent_name not in self.agent_metrics:
             self.agent_metrics[agent_name] = AgentMetrics(agent_name=agent_name)
 
-        # Create message log entry
         msg_log = MessageLog(
             timestamp=time.time(),
             direction="to_agent",
@@ -136,7 +96,6 @@ class SessionLogger:
         self.message_log.append(msg_log)
         self.agent_metrics[agent_name].messages_received += 1
 
-        # Write to log file
         self._append_to_log(
             f"[{self._format_time(msg_log.timestamp)}] → {agent_name}\n"
             f"  Message: {message[:80]}{'...' if len(message) > 80 else ''}\n"
@@ -152,20 +111,9 @@ class SessionLogger:
         success: bool = True,
         error: Optional[str] = None
     ):
-        """
-        Log a message received from an agent
-
-        Args:
-            agent_name: Name of the agent sending the message
-            message: The message content
-            success: Whether the agent operation was successful
-            error: Optional error message
-        """
-        # Ensure agent exists in metrics
         if agent_name not in self.agent_metrics:
             self.agent_metrics[agent_name] = AgentMetrics(agent_name=agent_name)
 
-        # Create message log entry
         msg_log = MessageLog(
             timestamp=time.time(),
             direction="from_agent",
@@ -179,7 +127,6 @@ class SessionLogger:
         if error:
             self.agent_metrics[agent_name].errors.append(error)
 
-        # Write to log file
         status = "✓" if success else "✗"
         self._append_to_log(
             f"[{self._format_time(msg_log.timestamp)}] ← {agent_name} {status}\n"
@@ -197,21 +144,9 @@ class SessionLogger:
         success: bool = True,
         error: Optional[str] = None
     ):
-        """
-        Log a tool call by an agent
-
-        Args:
-            agent_name: Name of the agent calling the tool
-            tool_name: Name of the tool being called
-            duration: Time taken in seconds
-            success: Whether the call succeeded
-            error: Optional error message
-        """
-        # Ensure agent exists in metrics
         if agent_name not in self.agent_metrics:
             self.agent_metrics[agent_name] = AgentMetrics(agent_name=agent_name)
 
-        # Create tool call record
         tool_call = ToolCall(
             tool_name=tool_name,
             timestamp=time.time(),
@@ -234,7 +169,6 @@ class SessionLogger:
         if duration:
             metrics.total_duration += duration
 
-        # Write to log file
         status = "✓" if success else "✗"
         duration_str = f" ({duration:.2f}s)" if duration else ""
         self._append_to_log(
@@ -243,14 +177,6 @@ class SessionLogger:
         )
 
     def log_tokens(self, agent_name: str, tokens: int, operation: str = ""):
-        """
-        Log token consumption
-
-        Args:
-            agent_name: Name of the agent
-            tokens: Number of tokens consumed
-            operation: Optional description of operation
-        """
         self.total_tokens[agent_name] += tokens
 
         op_str = f" ({operation})" if operation else ""
@@ -259,7 +185,6 @@ class SessionLogger:
         )
 
     def generate_summary(self):
-        """Generate and write session summary to log file"""
         session_duration = time.time() - self.session_start
 
         summary = [
@@ -271,7 +196,6 @@ class SessionLogger:
             ""
         ]
 
-        # Agent metrics
         if self.agent_metrics:
             summary.append("AGENT METRICS:")
             summary.append("-" * 80)
@@ -299,7 +223,6 @@ class SessionLogger:
                 if metrics.errors:
                     summary.append(f"  Errors: {len(metrics.errors)}")
 
-        # Total tokens
         total_tokens = sum(self.total_tokens.values())
         if total_tokens > 0:
             summary.extend([
@@ -312,7 +235,6 @@ class SessionLogger:
                 percentage = (tokens / total_tokens * 100) if total_tokens > 0 else 0
                 summary.append(f"  {agent_name}: {tokens:,} ({percentage:.1f}%)")
 
-        # Message flow visualization
         if self.message_log:
             summary.extend([
                 "",
@@ -321,7 +243,6 @@ class SessionLogger:
                 self._generate_message_flow_graph()
             ])
 
-        # Tool usage summary
         if any(m.tools_called > 0 for m in self.agent_metrics.values()):
             summary.extend([
                 "",
@@ -339,11 +260,9 @@ class SessionLogger:
 
         summary.append("\n" + "=" * 80 + "\n")
 
-        # Write to log
         self._append_to_log("\n".join(summary))
 
     def _generate_message_flow_graph(self) -> str:
-        """Generate ASCII visualization of message flow"""
         if not self.message_log:
             return "  No messages"
 
@@ -351,7 +270,6 @@ class SessionLogger:
         agent_positions = {}
         agents = sorted(set(msg.agent_name for msg in self.message_log))
 
-        # Create header
         header = "  Time      "
         for i, agent in enumerate(agents):
             agent_positions[agent] = i
@@ -359,14 +277,12 @@ class SessionLogger:
         lines.append(header)
         lines.append("  " + "-" * (10 + len(agents) * 12))
 
-        # Add message flow (condensed - max 20 entries)
         messages_to_show = self.message_log[-20:] if len(self.message_log) > 20 else self.message_log
 
         for msg in messages_to_show:
             time_str = self._format_time(msg.timestamp, short=True)
             line = f"  {time_str}  "
 
-            # Create visual representation
             for agent in agents:
                 if agent == msg.agent_name:
                     symbol = "→" if msg.direction == "to_agent" else "←"
@@ -382,19 +298,16 @@ class SessionLogger:
         return "\n".join(lines)
 
     def _append_to_log(self, content: str):
-        """Append content to log file"""
         with open(self.log_file, 'a', encoding='utf-8') as f:
             f.write(content)
 
     def _format_time(self, timestamp: float, short: bool = False) -> str:
-        """Format timestamp relative to session start"""
         elapsed = timestamp - self.session_start
         if short:
             return f"{elapsed:6.1f}s"
         return f"+{elapsed:.2f}s"
 
     def _format_duration(self, seconds: float) -> str:
-        """Format duration in human-readable format"""
         if seconds < 60:
             return f"{seconds:.2f}s"
         elif seconds < 3600:
@@ -407,27 +320,16 @@ class SessionLogger:
             return f"{hours}h {mins}m"
 
     def get_log_path(self) -> str:
-        """Get the path to the current log file"""
         return str(self.log_file)
 
     def close(self):
-        """Close the logger and write final summary"""
         self.generate_summary()
 
 
 class AgentLoggerMixin:
-    """
-    Mixin class to add logging capabilities to agents
-
-    Usage:
-        class MyAgent(BaseAgent, AgentLoggerMixin):
-            def __init__(self, ...):
-                self.logger = session_logger  # Shared session logger
-                self.agent_name = "my_agent"
-    """
+    """Mixin class to add logging capabilities to agents"""
 
     def log_received_message(self, message: str, has_function_calls: bool = False, function_call_count: int = 0):
-        """Log a message received from orchestrator"""
         if hasattr(self, 'logger') and self.logger:
             self.logger.log_message_to_agent(
                 self.agent_name,
@@ -437,7 +339,6 @@ class AgentLoggerMixin:
             )
 
     def log_sent_message(self, message: str, success: bool = True, error: Optional[str] = None):
-        """Log a message sent to orchestrator"""
         if hasattr(self, 'logger') and self.logger:
             self.logger.log_message_from_agent(
                 self.agent_name,
@@ -447,7 +348,6 @@ class AgentLoggerMixin:
             )
 
     def log_tool_execution(self, tool_name: str, duration: Optional[float] = None, success: bool = True, error: Optional[str] = None):
-        """Log a tool execution"""
         if hasattr(self, 'logger') and self.logger:
             self.logger.log_tool_call(
                 self.agent_name,
@@ -458,7 +358,6 @@ class AgentLoggerMixin:
             )
 
     def log_token_usage(self, tokens: int, operation: str = ""):
-        """Log token consumption"""
         if hasattr(self, 'logger') and self.logger:
             self.logger.log_tokens(
                 self.agent_name,

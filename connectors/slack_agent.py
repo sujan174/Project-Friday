@@ -1,21 +1,4 @@
-"""
-Slack Agent - Production-Ready Connector for Slack Workspace
-
-This module provides a robust, intelligent agent for interacting with Slack through
-the Model Context Protocol (MCP). It enables seamless team communication, content
-discovery, and workspace collaboration with comprehensive error handling and retry logic.
-
-Key Features:
-- Automatic retry with exponential backoff for transient failures
-- Intelligent message formatting and channel routing
-- Comprehensive error handling with context-aware messages
-- Operation tracking and statistics
-- Verbose logging for debugging
-- Smart content discovery and search
-
-Author: AI System
-Version: 2.0
-"""
+# Slack Agent - Connector for Slack Workspace via MCP
 
 import os
 import sys
@@ -47,13 +30,11 @@ from connectors.agent_intelligence import (
 # ============================================================================
 
 class RetryConfig:
-    """Configuration for retry logic with exponential backoff"""
     MAX_RETRIES = 3
     INITIAL_DELAY = 1.0  # seconds
     MAX_DELAY = 10.0     # seconds
     BACKOFF_FACTOR = 2.0
 
-    # Error types that should trigger a retry
     RETRYABLE_ERRORS = [
         "timeout",
         "connection",
@@ -68,7 +49,6 @@ class RetryConfig:
 
 
 class ErrorType(Enum):
-    """Classification of error types for better handling"""
     AUTHENTICATION = "authentication"
     PERMISSION = "permission"
     NOT_FOUND = "not_found"
@@ -81,7 +61,6 @@ class ErrorType(Enum):
 
 @dataclass
 class OperationStats:
-    """Track statistics for agent operations"""
     total_operations: int = 0
     successful_operations: int = 0
     failed_operations: int = 0
@@ -89,7 +68,6 @@ class OperationStats:
     tools_called: Dict[str, int] = field(default_factory=dict)
 
     def record_operation(self, tool_name: str, success: bool, retry_count: int = 0):
-        """Record an operation for statistics tracking"""
         self.total_operations += 1
         self.tools_called[tool_name] = self.tools_called.get(tool_name, 0) + 1
 
@@ -101,7 +79,6 @@ class OperationStats:
         self.retries += retry_count
 
     def get_summary(self) -> str:
-        """Get a human-readable summary of operations"""
         success_rate = (self.successful_operations / self.total_operations * 100) if self.total_operations > 0 else 0
         return (
             f"Operations: {self.total_operations} total, "
@@ -117,24 +94,6 @@ class OperationStats:
 # ============================================================================
 
 class Agent(BaseAgent):
-    """
-    Specialized agent for Slack operations via MCP
-
-    This agent provides intelligent, reliable interaction with Slack through:
-    - Smart message formatting and delivery
-    - Content discovery and search
-    - Channel and user management
-    - Automatic retry for transient failures
-    - Comprehensive error handling and reporting
-    - Operation tracking and statistics
-
-    Usage:
-        agent = Agent(verbose=True)
-        await agent.initialize()
-        result = await agent.execute("Send a message to #engineering about the deployment")
-        await agent.cleanup()
-    """
-
     def __init__(
         self,
         verbose: bool = False,
@@ -143,41 +102,28 @@ class Agent(BaseAgent):
     ,
         session_logger=None
     ):
-        """
-        Initialize the Slack agent
-
-        Args:
-            verbose: Enable detailed logging for debugging (default: False)
-                    session_logger: Optional session logger for tracking operations
-        """
         super().__init__()
 
-        # Session logging
         self.logger = session_logger
         self.agent_name = "slack"
 
-        # MCP Connection Components
         self.session: ClientSession = None
-        self.session_entered = False  # Track if session.__aenter__() succeeded
+        self.session_entered = False
         self.stdio_context = None
-        self.stdio_context_entered = False  # Track if stdio_context.__aenter__() succeeded
+        self.stdio_context_entered = False
         self.model = None
         self.available_tools = []
 
-        # Configuration
         self.verbose = verbose
         self.stats = OperationStats()
 
-        # Intelligence Components
         self.memory = ConversationMemory()
         self.knowledge = knowledge_base or WorkspaceKnowledge()
         self.shared_context = shared_context
         self.proactive = ProactiveAssistant('slack', verbose)
 
-        # Feature #1: Metadata Cache for faster operations
         self.metadata_cache = {}
 
-        # Schema type mapping for Gemini
         self.schema_type_map = {
             "string": protos.Type.STRING,
             "number": protos.Type.NUMBER,
@@ -187,15 +133,9 @@ class Agent(BaseAgent):
             "array": protos.Type.ARRAY,
         }
 
-        # System prompt - defines agent behavior and intelligence
         self.system_prompt = self._build_system_prompt()
 
-    # ========================================================================
-    # SYSTEM PROMPT - Agent Intelligence and Behavior
-    # ========================================================================
-
     def _build_system_prompt(self) -> str:
-        """Build the comprehensive system prompt that defines agent behavior"""
         return """You are an elite team communication specialist with deep expertise in organizational dynamics, asynchronous collaboration, and distributed team coordination. Your mission is to help teams communicate with precision, find critical information instantly, and coordinate complex workflows seamlessly through Slack.
 
 # Your Capabilities
@@ -704,40 +644,19 @@ No urgent action items outstanding.
 
 Remember: Slack is the nervous system of distributed teams. Every message you craft, every search you execute, every notification you trigger affects team productivity and culture. Communicate with precision, search with intelligence, and coordinate with empathy. Help teams work better together, asynchronously and effectively."""
 
-    # ========================================================================
-    # INITIALIZATION AND CONNECTION
-    # ========================================================================
-
     async def initialize(self):
-        """
-        Connect to Slack MCP server
-
-        Raises:
-            ValueError: If required environment variables are missing
-            RuntimeError: If connection or initialization fails
-        """
         try:
-            # Validate environment variables
             slack_bot_token, slack_team_id = self._get_credentials()
 
             if self.verbose:
                 print(f"[SLACK AGENT] Initializing connection to Slack team {slack_team_id}")
 
-            # Configure MCP server
             server_params = self._create_server_params(slack_bot_token, slack_team_id)
-
-            # Establish MCP connection
             await self._connect_to_mcp(server_params)
-
-            # Load available tools from server
             await self._load_tools()
-
-            # Initialize AI model
             self._initialize_model()
 
             self.initialized = True
-
-            # Feature #1: Prefetch workspace metadata for faster operations
             await self._prefetch_metadata()
 
             if self.verbose:
@@ -754,7 +673,6 @@ Remember: Slack is the nervous system of distributed teams. Every message you cr
             )
 
     def _get_credentials(self) -> Tuple[str, str]:
-        """Retrieve and validate Slack credentials from environment"""
         slack_bot_token = os.environ.get("SLACK_BOT_TOKEN")
         slack_team_id = os.environ.get("SLACK_TEAM_ID")
 
@@ -771,7 +689,6 @@ Remember: Slack is the nervous system of distributed teams. Every message you cr
         return slack_bot_token, slack_team_id
 
     def _create_server_params(self, bot_token: str, team_id: str) -> StdioServerParameters:
-        """Create MCP server parameters"""
         return StdioServerParameters(
             command="npx",
             args=["-y", "@modelcontextprotocol/server-slack"],
@@ -783,24 +700,21 @@ Remember: Slack is the nervous system of distributed teams. Every message you cr
         )
 
     async def _connect_to_mcp(self, server_params: StdioServerParameters):
-        """Establish connection to MCP server"""
         try:
             self.stdio_context = stdio_client(server_params)
             stdio, write = await self.stdio_context.__aenter__()
-            self.stdio_context_entered = True  # Mark as successfully entered
+            self.stdio_context_entered = True
 
             self.session = ClientSession(stdio, write)
             await self.session.__aenter__()
-            self.session_entered = True  # Mark as successfully entered
+            self.session_entered = True
 
             await self.session.initialize()
         except Exception as e:
-            # If connection fails, ensure we clean up partial state
             await self._cleanup_connection()
             raise
 
     async def _load_tools(self):
-        """Load available tools from MCP server"""
         tools_list = await self.session.list_tools()
         self.available_tools = tools_list.tools
 
@@ -808,7 +722,6 @@ Remember: Slack is the nervous system of distributed teams. Every message you cr
             raise RuntimeError("No tools available from Slack MCP server")
 
     def _initialize_model(self):
-        """Initialize the Gemini AI model with available tools"""
         gemini_tools = [self._build_function_declaration(tool) for tool in self.available_tools]
 
         self.model = genai.GenerativeModel(
@@ -818,16 +731,7 @@ Remember: Slack is the nervous system of distributed teams. Every message you cr
         )
 
     async def _prefetch_metadata(self):
-        """
-        Prefetch and cache Slack workspace metadata for faster operations (Feature #1)
-
-        Fetches channels, users, and workspace info at initialization time
-        to avoid discovery overhead on every operation.
-
-        Cache is persisted to knowledge base with a 1-hour TTL.
-        """
         try:
-            # Check if we have valid cached metadata
             cached = self.knowledge.get_metadata_cache('slack')
             if cached:
                 self.metadata_cache = cached
@@ -838,39 +742,32 @@ Remember: Slack is the nervous system of distributed teams. Every message you cr
             if self.verbose:
                 print(f"[SLACK AGENT] Prefetching metadata...")
 
-            # Fetch all channels (public + user's private)
             channels = await self._fetch_all_channels()
             if self.verbose:
                 print(f"[SLACK AGENT] Prefetched {len(channels)} channels")
 
-            # Fetch all users (limit to active users to avoid huge lists)
             users = await self._fetch_all_users()
             if self.verbose:
                 print(f"[SLACK AGENT] Prefetched {len(users)} users")
 
-            # Store in cache
             self.metadata_cache = {
                 'channels': channels,
                 'users': users,
                 'fetched_at': asyncio.get_event_loop().time()
             }
 
-            # Persist to knowledge base
             self.knowledge.save_metadata_cache('slack', self.metadata_cache, ttl_seconds=3600)
 
             if self.verbose:
                 print(f"[SLACK AGENT] Cached metadata: {len(channels)} channels, {len(users)} users")
 
         except Exception as e:
-            # Graceful degradation: If prefetch fails, continue without cache
             if self.verbose:
                 print(f"[SLACK AGENT] Warning: Metadata prefetch failed: {e}")
             print(f"[SLACK AGENT] Continuing without metadata cache (operations may be slower)")
 
     async def _fetch_all_channels(self) -> Dict:
-        """Fetch all accessible channels"""
         try:
-            # Use Slack MCP tool to list channels
             result = await self.session.call_tool("slack_list_channels", {})
 
             channels = {}
@@ -906,9 +803,7 @@ Remember: Slack is the nervous system of distributed teams. Every message you cr
             return {}
 
     async def _fetch_all_users(self) -> Dict:
-        """Fetch all users (limit to active to avoid huge lists)"""
         try:
-            # Use Slack MCP tool to list users
             result = await self.session.call_tool("slack_list_users", {})
 
             users = {}
@@ -923,7 +818,6 @@ Remember: Slack is the nervous system of distributed teams. Every message you cr
                 else:
                     user_list = []
 
-                # Limit to first 100 active users to avoid huge cache
                 for user in user_list[:100]:
                     if not user.get('deleted', False) and not user.get('is_bot', False):
                         user_id = user.get('id', '')
@@ -941,62 +835,25 @@ Remember: Slack is the nervous system of distributed teams. Every message you cr
             return {}
 
     def get_cached_channels(self) -> Dict[str, Any]:
-        """
-        Get all prefetched channels from cache.
-
-        Returns:
-            Dict mapping channel ID to channel info (id, name, is_private, num_members)
-        """
         return self.metadata_cache.get('channels', {})
 
     def get_cached_channel_by_name(self, channel_name: str) -> Optional[Dict[str, Any]]:
-        """
-        Look up a channel by name from cache (fast lookup).
-
-        Args:
-            channel_name: Name of the channel (with or without #)
-
-        Returns:
-            Channel info dict or None if not found
-        """
-        # Normalize channel name (remove # if present)
         name = channel_name.lstrip('#').lower()
-
-        # Search in cached channels
         for channel_id, channel_info in self.get_cached_channels().items():
             if channel_info['name'].lower() == name:
                 return channel_info
-
         return None
 
     def list_available_channels(self) -> List[str]:
-        """
-        Get list of all available channel names for user reference.
-
-        Returns:
-            List of channel names
-        """
         channels = self.get_cached_channels()
         return sorted([ch['name'] for ch in channels.values() if not ch.get('is_archived', False)])
 
     def _get_cached_channels_response(self) -> Optional[str]:
-        """
-        Get cached channels formatted as JSON response (cache-first optimization).
-
-        This method returns the cached channels in the same format that the
-        slack_list_channels API would return, allowing us to avoid API calls
-        for frequently used channel listings.
-
-        Returns:
-            JSON string with channels data, or None if cache is empty
-        """
         cached_channels = self.get_cached_channels()
 
-        # If cache is empty, return None to fall back to API call
         if not cached_channels:
             return None
 
-        # Convert cached channels to the format expected by the LLM
         channels_list = []
         for channel_id, channel_info in cached_channels.items():
             channels_list.append({
@@ -1007,21 +864,15 @@ Remember: Slack is the nervous system of distributed teams. Every message you cr
                 'num_members': channel_info.get('num_members', 0)
             })
 
-        # Format as JSON response
         response_data = {
             'channels': channels_list,
-            'cached': True,  # Mark that this came from cache
+            'cached': True,
             'timestamp': time.time()
         }
 
         return json.dumps(response_data)
 
-    # ========================================================================
-    # CORE EXECUTION ENGINE
-    # ========================================================================
-
     async def execute(self, instruction: str) -> str:
-        """Execute a Slack task with enhanced error handling and retry logic"""
         if not self.initialized:
             return self._format_error(Exception("Slack agent not initialized. Please restart the system."))
 

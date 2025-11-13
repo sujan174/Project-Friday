@@ -1,74 +1,26 @@
-"""
-Interactive Action Editor v4.0 - Ultra Modern Edition
-
-Beautiful, intuitive interface for editing action parameters before execution.
-
-Features:
-- Rich visual previews
-- Real-time validation
-- Context-aware help
-- Smooth workflows
-
-Author: AI System
-Version: 4.0
-"""
-
-from typing import Dict, List, Optional, Any
+from typing import Dict, Optional, Any
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 from rich.prompt import Prompt
-from rich.align import Align
-from rich.padding import Padding
-from rich.syntax import Syntax
-from rich import box
 
-# Import from orchestration (will be available at runtime)
 try:
-    from orchestration.actions import Action, ActionType, RiskLevel, FieldInfo
+    from orchestration.actions import FieldInfo
 except ImportError:
-    # Fallback for type hints
-    Action = None
-    ActionType = None
-    RiskLevel = None
     FieldInfo = None
 
 from ui.design_system import ds
 
 
 class InteractiveActionEditor:
-    """
-    Ultra-modern interactive editor for action parameters.
-
-    Features:
-    - Beautiful visual hierarchy
-    - Field-by-field editing
-    - Real-time validation
-    - Rich previews
-    - Helpful hints and examples
-    - Undo support
-    """
 
     def __init__(self):
         self.console = ds.get_console()
 
     def edit_action(self, action) -> Optional[Dict[str, Any]]:
-        """
-        Main editing interface for an action.
-
-        Shows:
-        1. Action summary
-        2. Current parameters
-        3. Interactive editor for each field
-        4. Review of changes
-
-        Returns:
-            Dict of edits, or None if cancelled
-        """
         self._show_action_overview(action)
 
-        # Collect editable fields
         editable_fields = {
             fname: finfo for fname, finfo in action.field_info.items()
             if finfo.editable
@@ -81,10 +33,8 @@ class InteractiveActionEditor:
 
         edits = {}
 
-        # Show current parameters
         self._show_current_parameters(action, editable_fields)
 
-        # Ask what to do
         self.console.print()
         options_table = Table(
             show_header=False,
@@ -116,20 +66,18 @@ class InteractiveActionEditor:
         )
 
         if choice == 'a':
-            return {}  # Approve with no edits
+            return {}
         elif choice == 'c':
-            return None  # Cancel
+            return None
         elif choice != 'e':
             return None
 
-        # Interactive field-by-field editor
         for field_name, field_info in editable_fields.items():
             edit_result = self._edit_field(field_name, field_info, action)
 
             if edit_result is not None:
                 edits[field_name] = edit_result
 
-        # Show summary of changes
         if edits:
             self._show_edit_summary(action, edits)
 
@@ -150,15 +98,8 @@ class InteractiveActionEditor:
         field_info,
         action
     ) -> Optional[Any]:
-        """
-        Edit a single field with beautiful interface.
-
-        Returns:
-            New value, or None if skipped
-        """
         self.console.clear()
 
-        # Header
         header = Text()
         header.append(f"{ds.icons.edit} ", style=ds.colors.accent_amber)
         header.append(f"Editing: {field_info.display_label}", style=f"bold {ds.colors.accent_amber}")
@@ -166,20 +107,16 @@ class InteractiveActionEditor:
         self.console.rule(header, style=ds.colors.accent_amber)
         self.console.print()
 
-        # Build field card
         field_content = Text()
 
-        # Description
         field_content.append(f"{ds.icons.info} Description:\n", style=f"bold {ds.semantic.component['label']}")
         field_content.append(f"  {field_info.description}\n\n", style=ds.colors.text_secondary)
 
-        # Current value
         field_content.append(f"{ds.icons.file} Current Value:\n", style=f"bold {ds.semantic.component['label']}")
 
         current_val = field_info.current_value
 
         if field_info.field_type == 'text' and isinstance(current_val, str) and '\n' in current_val:
-            # Multi-line text
             lines = current_val.split('\n')
             for i, line in enumerate(lines[:5], 1):
                 field_content.append(f"  {i}. {line}\n", style=ds.colors.text_primary)
@@ -187,12 +124,10 @@ class InteractiveActionEditor:
             if len(lines) > 5:
                 field_content.append(f"  ... ({len(lines)-5} more lines)\n", style=f"dim {ds.colors.text_tertiary}")
         else:
-            # Single value
             field_content.append(f"  {current_val}\n", style=f"bold {ds.colors.accent_teal}")
 
         field_content.append("\n")
 
-        # Constraints
         if field_info.constraints.allowed_values:
             field_content.append(f"{ds.icons.star} Allowed Values:\n", style=f"bold {ds.semantic.component['label']}")
             for val in field_info.constraints.allowed_values[:5]:
@@ -209,14 +144,12 @@ class InteractiveActionEditor:
                 field_content.append(f"  Maximum: {field_info.constraints.max_length} characters\n", style=ds.colors.text_secondary)
             field_content.append("\n")
 
-        # Examples
         if field_info.examples:
             field_content.append(f"{ds.icons.sparkle} Examples:\n", style=f"bold {ds.semantic.component['label']}")
             for ex in field_info.examples[:3]:
                 field_content.append(f"  {ds.icons.bullet} {ex}\n", style=f"dim {ds.colors.text_secondary}")
             field_content.append("\n")
 
-        # Display panel
         panel = Panel(
             field_content,
             border_style=ds.colors.accent_amber,
@@ -225,7 +158,6 @@ class InteractiveActionEditor:
         )
         self.console.print(panel)
 
-        # Get new value
         self.console.print()
 
         if field_info.field_type == 'text':
@@ -253,7 +185,6 @@ class InteractiveActionEditor:
             if not new_value:
                 return None
 
-        # Validate
         is_valid, error = field_info.constraints.validate(new_value)
 
         if not is_valid:
@@ -282,14 +213,12 @@ class InteractiveActionEditor:
             else:
                 return None
 
-        # Show validation success
         self.console.print()
         success = Text()
         success.append(f"{ds.icons.success} ", style=ds.colors.success)
         success.append("Valid!", style=ds.colors.success)
         self.console.print(success)
 
-        # Preview change
         self.console.print()
         preview = Text()
         preview.append(f"{ds.icons.magnifying_glass} Preview:\n\n", style=f"bold {ds.colors.accent_teal}")
@@ -308,7 +237,6 @@ class InteractiveActionEditor:
         )
         self.console.print(panel)
 
-        # Confirm change
         confirm = Prompt.ask(
             f"\n[bold {ds.colors.success}]{ds.icons.success} Keep this change?[/]",
             choices=["y", "n"],
@@ -321,7 +249,6 @@ class InteractiveActionEditor:
             return None
 
     def _read_multiline(self) -> str:
-        """Read multi-line input until user types 'END'"""
         lines = []
 
         while True:
@@ -338,10 +265,8 @@ class InteractiveActionEditor:
         return '\n'.join(lines)
 
     def _show_action_overview(self, action):
-        """Show beautiful action overview"""
         self.console.clear()
 
-        # Risk indicator
         risk_map = {
             'HIGH': (ds.icons.risk_high, ds.colors.error),
             'MEDIUM': (ds.icons.risk_medium, ds.colors.warning),
@@ -351,7 +276,6 @@ class InteractiveActionEditor:
         risk_str = action.risk_level.value if hasattr(action.risk_level, 'value') else str(action.risk_level)
         risk_icon, risk_color = risk_map.get(risk_str.upper(), ('⚪', ds.colors.text_secondary))
 
-        # Header
         header = Text()
         header.append(f"{risk_icon} ", style=risk_color)
         header.append(f"Action Review: {action.action_type.value.upper()}", style=f"bold {ds.colors.primary_500}")
@@ -359,7 +283,6 @@ class InteractiveActionEditor:
         self.console.rule(header, style=ds.colors.primary_500)
         self.console.print()
 
-        # Details
         details_content = Text()
 
         details_content.append(f"{ds.icons.agent} Agent:  ", style=ds.semantic.component['label'])
@@ -371,7 +294,6 @@ class InteractiveActionEditor:
         details_content.append(f"{ds.icons.warning} Risk:  ", style=ds.semantic.component['label'])
         details_content.append(f"{risk_str.upper()}\n", style=risk_color)
 
-        # Show enriched details if available
         if hasattr(action, 'details') and action.details:
             details = action.details
 
@@ -397,7 +319,6 @@ class InteractiveActionEditor:
         self.console.print()
 
     def _show_current_parameters(self, action, editable_fields: Dict):
-        """Show all current parameter values"""
         self.console.print()
 
         header = Text()
@@ -407,7 +328,6 @@ class InteractiveActionEditor:
         self.console.print(header)
         self.console.print()
 
-        # Create table
         params_table = Table(
             show_header=True,
             header_style=f"bold {ds.colors.text_primary}",
@@ -422,7 +342,6 @@ class InteractiveActionEditor:
         for fname, finfo in editable_fields.items():
             value = finfo.current_value
 
-            # Truncate long values
             if isinstance(value, str) and len(value) > 60:
                 display_val = value[:57] + "..."
             else:
@@ -433,7 +352,6 @@ class InteractiveActionEditor:
         self.console.print(params_table)
 
     def _show_edit_summary(self, action, edits: Dict[str, Any]):
-        """Show beautiful summary of all changes"""
         self.console.clear()
 
         header = Text()
@@ -443,7 +361,6 @@ class InteractiveActionEditor:
         self.console.rule(header, style=ds.colors.success)
         self.console.print()
 
-        # Build summary
         summary_content = Text()
 
         for field_name, new_value in edits.items():
@@ -469,7 +386,6 @@ class InteractiveActionEditor:
         self.console.print(panel)
 
     def _show_warning(self, message: str):
-        """Show warning message"""
         warning = Text()
         warning.append(f"{ds.icons.warning} ", style=ds.colors.warning)
         warning.append(message, style=ds.colors.warning)

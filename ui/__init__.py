@@ -1,23 +1,3 @@
-"""
-UI Module - Ultra Modern Edition v4.0
-
-A comprehensive, world-class terminal UI system with:
-- Unified design language
-- Beautiful components
-- Rich interactions
-- Professional polish
-
-Components:
-- EnhancedTerminalUI: Main terminal interface
-- InteractiveActionEditor: Parameter editing
-- NotificationManager: User feedback system
-- DesignSystem: Unified visual language
-
-Author: AI System
-Version: 4.0
-"""
-
-# Design System (Foundation)
 from ui.design_system import (
     ds,
     DesignSystem,
@@ -35,13 +15,11 @@ from ui.design_system import (
     Layout
 )
 
-# Main UI Components
 from ui.enhanced_terminal_ui import EnhancedTerminalUI, enhanced_ui
 from ui.interactive_editor import InteractiveActionEditor
 from ui.notifications import NotificationManager, ProgressNotification, notifications
 
 __all__ = [
-    # Design System
     'ds',
     'DesignSystem',
     'ColorPalette',
@@ -56,8 +34,6 @@ __all__ = [
     'build_divider',
     'build_key_value',
     'Layout',
-
-    # UI Components
     'EnhancedTerminalUI',
     'enhanced_ui',
     'InteractiveActionEditor',

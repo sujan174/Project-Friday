@@ -1,22 +1,3 @@
-"""
-UI Design System - Unified Visual Language
-==========================================
-
-A comprehensive design system providing:
-- Color palette with semantic meanings
-- Typography scales and styles
-- Spacing system
-- Component styles
-- Animation timings
-- Icon library
-- Layout constraints
-
-This ensures visual consistency across all UI components.
-
-Author: AI System
-Version: 4.0 - Ultra Modern Edition
-"""
-
 from dataclasses import dataclass
 from typing import Dict, Literal
 from rich.console import Console
@@ -25,38 +6,25 @@ from rich import box
 from rich.style import Style
 
 
-# ═══════════════════════════════════════════════════════════════
-# COLOR PALETTE
-# ═══════════════════════════════════════════════════════════════
-
 @dataclass
 class ColorPalette:
-    """
-    Modern, carefully crafted color palette.
 
-    Inspired by modern design systems like GitHub, Linear, and Vercel.
-    All colors tested for accessibility and terminal compatibility.
-    """
-
-    # Primary Brand Colors
     primary_50: str = "#E0F7FF"
     primary_100: str = "#B3EDFF"
     primary_200: str = "#80E1FF"
     primary_300: str = "#4DD5FF"
     primary_400: str = "#1ACAFF"
-    primary_500: str = "#00BFF0"  # Main brand color
+    primary_500: str = "#00BFF0"
     primary_600: str = "#00A8D6"
     primary_700: str = "#0090BD"
     primary_800: str = "#0078A3"
     primary_900: str = "#005B7A"
 
-    # Accent Colors
     accent_purple: str = "#A78BFA"
     accent_pink: str = "#F472B6"
     accent_teal: str = "#2DD4BF"
     accent_amber: str = "#FBBF24"
 
-    # Semantic Colors
     success_light: str = "#6EE7B7"
     success: str = "#10B981"
     success_dark: str = "#059669"
@@ -73,7 +41,6 @@ class ColorPalette:
     info: str = "#3B82F6"
     info_dark: str = "#2563EB"
 
-    # Neutral Colors (Grayscale)
     gray_50: str = "#F9FAFB"
     gray_100: str = "#F3F4F6"
     gray_200: str = "#E5E7EB"
@@ -85,7 +52,6 @@ class ColorPalette:
     gray_800: str = "#1F2937"
     gray_900: str = "#111827"
 
-    # Special Colors
     background: str = "#0A0E27"
     background_light: str = "#0F1419"
     surface: str = "#161B22"
@@ -99,7 +65,6 @@ class ColorPalette:
     border: str = "#30363D"
     border_bright: str = "#444C56"
 
-    # Syntax Highlighting (for code blocks)
     syntax_keyword: str = "#FF7B72"
     syntax_string: str = "#A5D6FF"
     syntax_function: str = "#D2A8FF"
@@ -107,18 +72,11 @@ class ColorPalette:
     syntax_comment: str = "#8B949E"
 
 
-# ═══════════════════════════════════════════════════════════════
-# TYPOGRAPHY
-# ═══════════════════════════════════════════════════════════════
-
 @dataclass
 class Typography:
-    """Typography scale and styles"""
 
-    # Font families (terminal compatible)
     mono: str = "monospace"
 
-    # Sizes (in relative terms)
     size_xs: str = "dim"
     size_sm: str = "default"
     size_base: str = "default"
@@ -127,25 +85,18 @@ class Typography:
     size_2xl: str = "bold"
     size_3xl: str = "bold"
 
-    # Weights
     weight_normal: str = ""
     weight_medium: str = ""
     weight_semibold: str = "bold"
     weight_bold: str = "bold"
 
-    # Line heights (spacing)
     leading_tight: int = 1
     leading_normal: int = 1
     leading_relaxed: int = 2
 
 
-# ═══════════════════════════════════════════════════════════════
-# SPACING SYSTEM
-# ═══════════════════════════════════════════════════════════════
-
 @dataclass
 class Spacing:
-    """Consistent spacing scale (in characters/lines)"""
 
     xs: int = 1
     sm: int = 2
@@ -155,7 +106,6 @@ class Spacing:
     xxl: int = 8
     xxxl: int = 12
 
-    # Padding tuples (vertical, horizontal)
     padding_none: tuple = (0, 0)
     padding_sm: tuple = (0, 1)
     padding_md: tuple = (1, 2)
@@ -163,21 +113,14 @@ class Spacing:
     padding_xl: tuple = (2, 4)
 
 
-# ═══════════════════════════════════════════════════════════════
-# BOX STYLES
-# ═══════════════════════════════════════════════════════════════
-
 class BoxStyles:
-    """Pre-configured box styles for different UI elements"""
 
-    # Border styles from rich.box
     default = box.ROUNDED
     heavy = box.HEAVY
     double = box.DOUBLE
     minimal = box.MINIMAL
     simple = box.SIMPLE
 
-    # Custom styles for specific components
     panel_default = box.ROUNDED
     panel_emphasis = box.DOUBLE
     panel_subtle = box.MINIMAL
@@ -185,42 +128,28 @@ class BoxStyles:
     container = box.SQUARE
 
 
-# ═══════════════════════════════════════════════════════════════
-# ANIMATION & TIMING
-# ═══════════════════════════════════════════════════════════════
-
 @dataclass
 class Animation:
-    """Animation and timing constants"""
 
-    # Durations (in seconds)
     instant: float = 0.0
     fast: float = 0.1
     normal: float = 0.2
     slow: float = 0.3
     slower: float = 0.5
 
-    # Spinner styles
     spinner_default: str = "dots"
     spinner_processing: str = "arc"
     spinner_loading: str = "line"
     spinner_bounce: str = "bouncingBall"
 
 
-# ═══════════════════════════════════════════════════════════════
-# ICON LIBRARY
-# ═══════════════════════════════════════════════════════════════
-
 class Icons:
-    """Unicode icons for consistent visual language"""
 
-    # Status
     success = "✓"
     error = "✗"
     warning = "⚠"
     info = "ℹ"
 
-    # Actions
     send = "↗"
     receive = "↙"
     edit = "✎"
@@ -228,21 +157,18 @@ class Icons:
     copy = "⎘"
     save = "💾"
 
-    # UI Elements
     chevron_right = "›"
     chevron_down = "⌄"
     bullet = "•"
     arrow_right = "→"
     arrow_left = "←"
 
-    # Entities
     user = "👤"
     agent = "🤖"
     file = "📄"
     folder = "📁"
     link = "🔗"
 
-    # Special
     sparkle = "✨"
     rocket = "🚀"
     fire = "🔥"
@@ -250,34 +176,25 @@ class Icons:
     clock = "⏱"
     calendar = "📅"
 
-    # Emotion/Feedback
     wave = "👋"
     party = "🎉"
     thinking = "💭"
     lightning = "⚡"
 
-    # Tools
     wrench = "🔧"
     gear = "⚙"
     magnifying_glass = "🔍"
 
-    # Risk levels
     risk_low = "🟢"
     risk_medium = "🟡"
     risk_high = "🔴"
 
 
-# ═══════════════════════════════════════════════════════════════
-# SEMANTIC STYLES (Shortcuts)
-# ═══════════════════════════════════════════════════════════════
-
 class Semantic:
-    """Semantic style mappings for common UI patterns"""
 
     def __init__(self, palette: ColorPalette):
         self.palette = palette
 
-        # Text styles
         self.text = {
             'primary': f"bold {palette.text_primary}",
             'secondary': palette.text_secondary,
@@ -286,7 +203,6 @@ class Semantic:
             'brand': f"bold {palette.primary_500}",
         }
 
-        # Status styles
         self.status = {
             'success': f"bold {palette.success}",
             'warning': f"bold {palette.warning}",
@@ -294,7 +210,6 @@ class Semantic:
             'info': f"bold {palette.info}",
         }
 
-        # Component styles
         self.component = {
             'header': f"bold {palette.primary_500}",
             'subheader': palette.text_secondary,
@@ -304,7 +219,6 @@ class Semantic:
             'link': f"underline {palette.info}",
         }
 
-        # Border styles
         self.border = {
             'default': palette.border,
             'bright': palette.border_bright,
@@ -316,60 +230,37 @@ class Semantic:
         }
 
 
-# ═══════════════════════════════════════════════════════════════
-# RICH THEME
-# ═══════════════════════════════════════════════════════════════
-
 def create_rich_theme() -> Theme:
-    """Create Rich library theme with our design system"""
 
     palette = ColorPalette()
 
     return Theme({
-        # Base styles
         "success": f"bold {palette.success}",
         "warning": f"bold {palette.warning}",
         "error": f"bold {palette.error}",
         "info": f"bold {palette.info}",
 
-        # Custom styles
         "primary": f"bold {palette.primary_500}",
         "accent": f"bold {palette.accent_purple}",
         "muted": f"dim {palette.text_tertiary}",
         "brand": f"bold {palette.primary_500}",
 
-        # Component-specific
         "panel.header": f"bold {palette.primary_500}",
         "panel.border": palette.border,
         "table.header": f"bold {palette.text_primary}",
         "code": palette.syntax_keyword,
 
-        # Status
         "status.loading": f"{palette.info}",
         "status.success": f"bold {palette.success}",
         "status.error": f"bold {palette.error}",
 
-        # Progress bars
         "bar.complete": palette.success,
         "bar.finished": palette.success,
         "bar.pulse": palette.primary_500,
     })
 
 
-# ═══════════════════════════════════════════════════════════════
-# DESIGN SYSTEM INSTANCE
-# ═══════════════════════════════════════════════════════════════
-
 class DesignSystem:
-    """
-    Main design system class.
-
-    Usage:
-        from ui.design_system import ds
-
-        console.print(f"[{ds.colors.success}]Success![/]")
-        panel = Panel(..., border_style=ds.semantic.border['success'])
-    """
 
     def __init__(self):
         self.colors = ColorPalette()
@@ -382,20 +273,13 @@ class DesignSystem:
         self.theme = create_rich_theme()
 
     def get_console(self, **kwargs) -> Console:
-        """Get a Console instance with our theme applied"""
         return Console(theme=self.theme, **kwargs)
 
 
-# Global instance
 ds = DesignSystem()
 
 
-# ═══════════════════════════════════════════════════════════════
-# COMPONENT BUILDERS (Helper Functions)
-# ═══════════════════════════════════════════════════════════════
-
 def build_status_text(status: Literal['success', 'error', 'warning', 'info'], message: str) -> str:
-    """Build a status message with icon and color"""
 
     icon_map = {
         'success': (ds.icons.success, ds.colors.success),
@@ -409,7 +293,6 @@ def build_status_text(status: Literal['success', 'error', 'warning', 'info'], me
 
 
 def build_badge(text: str, style: Literal['success', 'error', 'warning', 'info', 'neutral'] = 'neutral') -> str:
-    """Build a badge/pill component"""
 
     style_map = {
         'success': (ds.colors.success, ds.colors.background),
@@ -424,7 +307,6 @@ def build_badge(text: str, style: Literal['success', 'error', 'warning', 'info',
 
 
 def build_divider(text: str = "", style: str = None) -> str:
-    """Build a divider with optional text"""
 
     if not style:
         style = ds.colors.border
@@ -436,7 +318,6 @@ def build_divider(text: str = "", style: str = None) -> str:
 
 
 def build_key_value(key: str, value: str, key_width: int = 20) -> str:
-    """Build a key-value pair with consistent styling"""
 
     key_part = f"[{ds.semantic.component['label']}]{key.ljust(key_width)}[/]"
     value_part = f"[{ds.semantic.component['value']}]{value}[/]"
@@ -444,29 +325,20 @@ def build_key_value(key: str, value: str, key_width: int = 20) -> str:
     return f"{key_part} {value_part}"
 
 
-# ═══════════════════════════════════════════════════════════════
-# LAYOUT HELPERS
-# ═══════════════════════════════════════════════════════════════
-
 class Layout:
-    """Layout helper functions"""
 
     @staticmethod
     def center_text(text: str, width: int = 70) -> str:
-        """Center text within a given width"""
-        # Note: This is tricky with Rich markup, so we do it simply
         padding = (width - len(text)) // 2
         return " " * padding + text
 
     @staticmethod
     def truncate(text: str, max_length: int = 60, suffix: str = "...") -> str:
-        """Truncate text with suffix"""
         if len(text) <= max_length:
             return text
         return text[:max_length - len(suffix)] + suffix
 
     @staticmethod
     def wrap_text(text: str, width: int = 70) -> list:
-        """Simple text wrapping"""
         import textwrap
         return textwrap.wrap(text, width=width)
