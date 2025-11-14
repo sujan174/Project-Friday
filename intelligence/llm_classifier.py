@@ -12,9 +12,8 @@ from dataclasses import dataclass, asdict
 
 from intelligence.base_types import Intent, IntentType, Entity, EntityType
 from llms.base_llm import BaseLLM
-from core.logger import get_logger
 
-logger = get_logger(__name__)
+# logger removed
 
 
 @dataclass
@@ -93,7 +92,7 @@ Analyze the user's message and provide a structured classification with high con
             if time.time() - timestamp < self.cache_ttl:
                 self.cache_hits += 1
                 if self.verbose:
-                    logger.info(f"Cache hit for message (hit rate: {self.get_cache_hit_rate():.1%})")
+                    # info(f"Cache hit for message (hit rate: {self.get_cache_hit_rate():.1%})")
                 return result
             else:
                 # Expired, remove from cache
@@ -172,8 +171,8 @@ Be precise and confident. If the message is clear, confidence should be > 0.85."
             latency_ms = (time.time() - start_time) * 1000
 
             if self.verbose:
-                logger.info(f"LLM classification completed in {latency_ms:.0f}ms")
-                logger.debug(f"Classification result: {json.dumps(response, indent=2)}")
+                # info(f"LLM classification completed in {latency_ms:.0f}ms")
+                # debug(f"Classification result: {json.dumps(response, indent=2)}")
 
             # Parse response into structured result
             result = LLMIntentResult(
@@ -193,7 +192,7 @@ Be precise and confident. If the message is clear, confidence should be > 0.85."
             return result
 
         except Exception as e:
-            logger.error(f"LLM classification failed: {e}", exc_info=True)
+            # error(f"LLM classification failed: {e}", exc_info=True)
             # Fallback to UNKNOWN with low confidence
             return LLMIntentResult(
                 primary_intent='UNKNOWN',

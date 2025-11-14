@@ -15,9 +15,9 @@ from intelligence.base_types import Intent, Entity, IntentType, EntityType
 from intelligence.fast_filter import FastKeywordFilter
 from intelligence.llm_classifier import LLMIntentClassifier
 from llms.base_llm import BaseLLM
-from core.logger import get_logger
+# Logging removed - using session logger in orchestrator
 
-logger = get_logger(__name__)
+# logger removed
 
 
 @dataclass
@@ -95,7 +95,7 @@ class HybridIntelligenceSystem:
             self.fast_path_count += 1
 
             if self.verbose:
-                logger.info(f"[HYBRID] Fast path: {intent_type.value} ({latency_ms:.1f}ms)")
+                pass  # Verbose logging removed
 
             return HybridIntelligenceResult(
                 intents=[intent],
@@ -133,7 +133,7 @@ class HybridIntelligenceSystem:
             self.total_latency_ms += latency_ms
 
             if self.verbose:
-                logger.info(f"[HYBRID] LLM path: {llm_result.primary_intent} ({latency_ms:.1f}ms)")
+                pass  # Verbose logging removed
 
             return HybridIntelligenceResult(
                 intents=intents,
@@ -148,7 +148,7 @@ class HybridIntelligenceSystem:
 
         except Exception as e:
             # Fallback to UNKNOWN if both fail
-            logger.error(f"Hybrid classification failed: {e}", exc_info=True)
+            # error(f"Hybrid classification failed: {e}", exc_info=True)
 
             latency_ms = (time.time() - start_time) * 1000
             self.total_latency_ms += latency_ms

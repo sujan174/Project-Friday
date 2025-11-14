@@ -9,10 +9,9 @@ from enum import Enum
 from datetime import datetime
 
 from config import Config
-from core.logger import get_logger
 from core.input_validator import InputValidator
 
-logger = get_logger(__name__)
+# logger removed
 
 
 class ActionType(str, Enum):
@@ -318,7 +317,7 @@ class ActionEnricher:
         try:
             is_valid, error = InputValidator.validate_instruction(action.instruction)
             if not is_valid:
-                logger.warning(f"Invalid instruction: {error}")
+                # warning(f"Invalid instruction: {error}")
                 action.details = {'error': f'Invalid instruction: {error}'}
                 return
 
@@ -328,13 +327,13 @@ class ActionEnricher:
                     timeout=Config.ENRICHMENT_TIMEOUT
                 )
             except asyncio.TimeoutError:
-                logger.warning(f"Enrichment timeout for {action.agent_name}")
+                # warning(f"Enrichment timeout for {action.agent_name}")
                 action.details = {'error': f'Enrichment timed out (>{Config.ENRICHMENT_TIMEOUT}s)'}
                 if Config.REQUIRE_ENRICHMENT_FOR_HIGH_RISK and action.risk_level.value == 'high':
-                    logger.error(f"Blocking HIGH-RISK action due to failed enrichment: {action.id}")
+                    # error(f"Blocking HIGH-RISK action due to failed enrichment: {action.id}")
 
         except Exception as e:
-            logger.error(f"Unexpected error during enrichment: {str(e)}", exc_info=True)
+            # error(f"Unexpected error during enrichment: {str(e)}", exc_info=True)
             action.details = {'error': f'Enrichment error: {str(e)}'}
 
     async def _enrich_action_impl(self, action: Action, agent: Optional[Any] = None) -> None:

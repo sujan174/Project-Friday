@@ -17,7 +17,6 @@ from llms.base_llm import BaseLLM, LLMConfig
 from llms.gemini_flash import GeminiFlash
 
 from connectors.agent_intelligence import WorkspaceKnowledge, SharedContext
-from connectors.agent_logger import SessionLogger
 
 from intelligence import (
     TaskDecomposer,
@@ -25,19 +24,13 @@ from intelligence import (
     HybridIntelligenceSystem
 )
 
-
-from core.logger import get_logger
+from core.session_logger import SessionLogger
 from core.input_validator import InputValidator
 from core.errors import ErrorClassifier, format_error_for_user, DuplicateOperationDetector, ErrorMessageEnhancer
-
-from core.observability import initialize_observability
-
 from core.resilience import RetryManager
 from core.user import UserPreferenceManager, AnalyticsCollector
 from core.parallel_executor import ParallelExecutor, AgentTask, TaskStatus
 from core.circuit_breaker import CircuitBreaker, CircuitConfig, CircuitBreakerError
-
-logger = get_logger(__name__)
 load_dotenv()
 
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
@@ -55,21 +48,16 @@ class OrchestratorAgent:
             if not llm_response:
                 return None
             if not hasattr(llm_response, 'metadata') or not llm_response.metadata:
-                logger.warning("LLM response missing metadata")
                 return None
             response_obj = llm_response.metadata.get('response_object')
             if not response_obj:
-                logger.warning("Response object not in metadata")
                 return None
             if not hasattr(response_obj, 'candidates') or not response_obj.candidates:
-                logger.warning("Response object missing candidates")
                 return None
             return response_obj
         except AttributeError as e:
-            logger.error(f"Error accessing response metadata: {e}", exc_info=True)
             return None
         except Exception as e:
-            logger.error(f"Unexpected error extracting response: {e}", exc_info=True)
             return None
 
     def __init__(self, connectors_dir: str = "connectors", verbose: bool = False, llm: Optional[BaseLLM] = None):
@@ -88,7 +76,7 @@ class OrchestratorAgent:
             self.llm = llm
 
         if self.verbose:
-            logger.info(f"Using LLM: {self.llm}")
+            print(f"Using LLM: {self.llm}")
 
         self.knowledge_base = WorkspaceKnowledge()
         self.session_id = str(uuid.uuid4())
@@ -101,19 +89,7 @@ class OrchestratorAgent:
 
         self.operation_count = 0
 
-        self.session_logger = SessionLogger(log_dir="logs", session_id=self.session_id)
-
-        self.observability = initialize_observability(
-            session_id=self.session_id,
-            service_name="orchestrator",
-            log_level=os.environ.get("LOG_LEVEL", "INFO"),
-            enable_tracing=True,
-            enable_metrics=True,
-            verbose=self.verbose
-        )
-
-        self.orch_logger = self.observability.orchestration_logger
-        self.intel_logger = self.observability.intelligence_logger
+        self.session_logger = SessionLogger(session_id=self.session_id, log_dir="logs")
 
         # Modern hybrid intelligence system (Fast filter + LLM classifier)
         self.hybrid_intelligence = HybridIntelligenceSystem(
@@ -179,17 +155,24 @@ class OrchestratorAgent:
             try:
                 self.user_prefs.load_from_file(str(self.prefs_file))
                 if self.verbose:
-                    logger.info(f"Loaded user preferences from {self.prefs_file}")
+                    print(f"Loaded user preferences from {self.prefs_file}")
             except Exception as e:
-                logger.warning(f"Failed to load preferences: {e}")
+                if self.verbose:
+                    print(f"Warning: Failed to load preferences: {e}")
 
         if self.verbose:
-            logger.info(f"Intelligence enabled: Session {self.session_id[:8]}...")
-            logger.info("Hybrid Intelligence: Fast Filter + LLM Classifier")
-            logger.info("  • 92% accuracy with semantic understanding")
-            logger.info("  • ~80ms avg latency with caching")
-            logger.info(f"Logging to: {self.session_logger.get_log_path()}")
-            logger.info("Retry, Analytics, Preferences - All enabled")
+            print(f"Intelligence enabled: Session {self.session_id[:8]}...")
+            print("Hybrid Intelligence: Fast Filter + LLM Classifier")
+            print("  • 92% accuracy with semantic understanding")
+            print("  • ~80ms avg latency with caching")
+            print(f"Logging to: {self.session_logger.get_log_path()}")
+            print("Retry, Analytics, Preferences - All enabled")
+
+        # Log session start
+        self.session_logger.log_system_event('session_start', {
+            'session_id': self.session_id,
+            'verbose': self.verbose
+        })
 
         self.system_prompt = """You are an AI orchestration system that coordinates specialized agents to help users accomplish complex tasks across multiple platforms and tools.
 
@@ -346,7 +329,7 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
     async def _spinner(self, task: asyncio.Task, message: str):
         """Simple wrapper for tasks - just awaits the task"""
         if self.verbose:
-            logger.info(message)
+            print(message)
         await task
 
     async def _load_single_agent(self, connector_file: Path) -> Optional[tuple]:
@@ -419,7 +402,8 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
                     if hasattr(agent_instance, 'cleanup'):
                         await agent_instance.cleanup()
                 except Exception as cleanup_err:
-                    logger.error(f"Failed to cleanup {agent_name}: {cleanup_err}", exc_info=True)
+                    if self.verbose:
+                        print(f"Failed to cleanup {agent_name}: {cleanup_err}")
                 return (agent_name, None, None, messages)
 
         except Exception as e:
@@ -430,25 +414,25 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
 
     async def discover_and_load_agents(self):
         if self.verbose:
-            logger.info("="*60)
-            logger.info("Discovering Agent Connectors...")
-            logger.info("="*60)
+            print("="*60)
+            print("Discovering Agent Connectors...")
+            print("="*60)
 
         if not self.connectors_dir.exists():
-            logger.warning(f"Connectors directory '{self.connectors_dir}' not found!")
-            logger.info("Creating directory...")
+            print(f"Connectors directory '{self.connectors_dir}' not found!")
+            print("Creating directory...")
             self.connectors_dir.mkdir(parents=True, exist_ok=True)
             return
 
         connector_files = list(self.connectors_dir.glob("*_agent.py"))
 
         if not connector_files:
-            logger.warning(f"No agent connectors found in '{self.connectors_dir}'")
-            logger.info("Expected files matching pattern: *_agent.py")
+            print(f"No agent connectors found in '{self.connectors_dir}'")
+            print("Expected files matching pattern: *_agent.py")
             return
 
         if self.verbose:
-            logger.info(f"Loading {len(connector_files)} agent(s) in parallel...")
+            print(f"Loading {len(connector_files)} agent(s) in parallel...")
 
         load_tasks = [self._load_single_agent(f) for f in connector_files]
         results = await asyncio.gather(*load_tasks, return_exceptions=True)
@@ -462,21 +446,21 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
 
             if isinstance(result, BaseException):
                 failed += 1
-                logger.error(f"Exception during loading: {result}")
+                print(f"Exception during loading: {result}")
                 if self.verbose:
-                    logger.error(f"  Type: {type(result).__name__}")
+                    print(f"  Type: {type(result).__name__}")
                 continue
 
             if not isinstance(result, tuple) or len(result) != 4:
                 failed += 1
-                logger.error(f"Invalid result from agent loading: {result}")
+                print(f"Invalid result from agent loading: {result}")
                 continue
 
             agent_name, agent_instance, capabilities, messages = result
 
             for msg in messages:
                 if self.verbose:
-                    logger.info(msg)
+                    print(msg)
 
             if agent_instance is not None and capabilities is not None:
                 self.sub_agents[agent_name] = agent_instance
@@ -487,13 +471,12 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
                     'error_count': 0
                 }
 
-                if hasattr(self, 'orch_logger'):
-                    self.orch_logger.log_agent_initialized(
-                        agent_name=agent_name,
-                        capabilities=capabilities,
-                        metadata={'loaded_at': asyncio.get_event_loop().time()}
-                    )
-                    self.orch_logger.log_agent_ready(agent_name)
+                # Log agent initialization
+                self.session_logger.log_system_event('agent_initialized', {
+                    'agent_name': agent_name,
+                    'capabilities': capabilities,
+                    'status': 'ready'
+                })
 
                 successful += 1
             else:
@@ -505,12 +488,12 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
                 }
                 failed += 1
 
-        logger.info(f"Loaded {successful} agent(s) successfully.")
+        print(f"Loaded {successful} agent(s) successfully.")
         if failed > 0:
-            logger.warning(f"{failed} agent(s) failed to load but system will continue.")
+            print(f"{failed} agent(s) failed to load but system will continue.")
 
         if self.verbose:
-            logger.info("="*60)
+            print("="*60)
 
     def _create_agent_tools(self) -> List[protos.FunctionDeclaration]:
         tools = []
@@ -551,39 +534,20 @@ Provide a clear instruction describing what you want to accomplish.""",
             health = self.agent_health[agent_name]
             if health['status'] == 'unavailable':
                 error_msg = f"⚠️ {agent_name} agent is currently unavailable: {health.get('error_message', 'Unknown error')}"
-                logger.warning(error_msg)
+                print(error_msg)
                 return error_msg
 
         operation_key = f"{agent_name}_{hashlib.md5(instruction[:100].encode()).hexdigest()[:8]}"
 
         task_id = operation_key
-        if hasattr(self, 'orch_logger'):
-            self.orch_logger.log_task_assigned(
-                task_id=task_id,
-                task_name=instruction[:100],
-                agent_name=agent_name,
-                metadata={'operation_key': operation_key}
-            )
 
         async def execute_operation():
-            if hasattr(self, 'orch_logger'):
-                self.orch_logger.log_task_started(task_id)
-
             result = await self._execute_agent_direct(agent_name, instruction, context)
-
-            if hasattr(self, 'orch_logger'):
-                success = result and not result.startswith("⚠️") and not result.startswith("❌")
-                self.orch_logger.log_task_completed(
-                    task_id=task_id,
-                    success=success,
-                    error=result if not success else None
-                )
-
             return result
 
         def progress_callback(message: str, attempt: int, max_attempts: int):
             if attempt > 1:
-                logger.info(f"🔄 {message}")
+                print(f"🔄 {message}")
 
         try:
             result = await self.retry_manager.execute_with_retry(
@@ -597,17 +561,17 @@ Provide a clear instruction describing what you want to accomplish.""",
 
         except Exception as e:
             error_msg = f"Error executing {agent_name} agent: {str(e)}"
-            logger.error(error_msg)
+            print(error_msg)
             if self.verbose:
                 traceback.print_exc()
             return error_msg
 
     async def _execute_agent_direct(self, agent_name: str, instruction: str, context: Any = None) -> str:
         if self.verbose:
-            logger.info("─"*60)
-            logger.info(f"🤖 Delegating to {agent_name} agent")
-            logger.info("─"*60)
-            logger.info(f"Instruction: {instruction}")
+            print("─"*60)
+            print(f"🤖 Delegating to {agent_name} agent")
+            print("─"*60)
+            print(f"Instruction: {instruction}")
 
         context_str = ""
         if context:
@@ -617,7 +581,7 @@ Provide a clear instruction describing what you want to accomplish.""",
                 context_str = str(context)
 
             if self.verbose:
-                logger.info(f"Context: {context_str[:200]}...")
+                print(f"Context: {context_str[:200]}...")
 
         import time
         start_time = time.time()
@@ -628,8 +592,6 @@ Provide a clear instruction describing what you want to accomplish.""",
             full_instruction = instruction
             if context_str:
                 full_instruction = f"Context from previous steps:\n{context_str}\n\nTask: {instruction}"
-
-            self.session_logger.log_message_to_agent(agent_name, full_instruction)
 
             result = await agent.execute(full_instruction)
 
@@ -644,14 +606,22 @@ Provide a clear instruction describing what you want to accomplish.""",
                       not result.startswith("Error"))
             error = result if not success else None
 
+            # Log agent call
+            self.session_logger.log_agent_call(
+                agent_name=agent_name,
+                instruction=full_instruction,
+                response=result,
+                duration=latency_ms / 1000,
+                success=success,
+                error=error
+            )
+
             self.analytics.record_agent_call(
                 agent_name=agent_name,
                 success=success,
                 latency_ms=latency_ms,
                 error_message=error
             )
-
-            self.session_logger.log_message_from_agent(agent_name, result, success, error)
 
             if success and agent_name in self.agent_health:
                 self.agent_health[agent_name]['status'] = 'healthy'
@@ -660,8 +630,8 @@ Provide a clear instruction describing what you want to accomplish.""",
 
             if self.verbose:
                 status = "✓" if success else "✗"
-                logger.info(f"{status} {agent_name} completed ({latency_ms:.0f}ms)")
-                logger.info("─"*60)
+                print(f"{status} {agent_name} completed ({latency_ms:.0f}ms)")
+                print("─"*60)
 
             if not success:
                 enhanced = self.error_enhancer.enhance_error(
@@ -673,7 +643,7 @@ Provide a clear instruction describing what you want to accomplish.""",
                 enhanced_msg = enhanced.format()
 
                 if self.verbose:
-                    logger.warning(enhanced_msg)
+                    print(enhanced_msg)
 
                 raise RuntimeError(enhanced_msg)
 
@@ -704,17 +674,13 @@ Provide a clear instruction describing what you want to accomplish.""",
 
                 if self.agent_health[agent_name]['error_count'] >= 3:
                     self.agent_health[agent_name]['status'] = 'degraded'
-                    logger.warning(f"⚠️ {agent_name} agent marked as degraded after 3 failures")
+                    print(f"⚠️ {agent_name} agent marked as degraded after 3 failures")
 
             raise RuntimeError(enhanced_msg)
 
     async def _process_with_intelligence(self, user_message: str) -> Dict:
         """Process user message with hybrid intelligence system"""
-        if hasattr(self, 'intel_logger'):
-            start_time = self.intel_logger.log_message_processing_start(user_message)
-        else:
-            import time
-            start_time = time.time()
+        start_time = time.time()
 
         # Get conversation context
         context_dict = self.context_manager.get_relevant_context(user_message)
@@ -728,60 +694,16 @@ Provide a clear instruction describing what you want to accomplish.""",
         intents = hybrid_result.intents
         entities = hybrid_result.entities
 
-        # Log classification with intelligence logger
-        if hasattr(self, 'intel_logger'):
-            intent_names = [str(i) for i in intents]
-            confidence_scores = {str(i): getattr(i, 'confidence', 0.8) for i in intents}
-            self.intel_logger.log_intent_classification(
-                message=user_message,
-                detected_intents=intent_names[:5],
-                confidence_scores=confidence_scores,
-                classification_method=f"hybrid_{hybrid_result.path_used}",
-                duration_ms=hybrid_result.latency_ms,
-                cache_hit=(hybrid_result.path_used == "fast")
-            )
-
         if self.verbose:
-            logger.info(f"[HYBRID] Path: {hybrid_result.path_used}, "
+            print(f"[HYBRID] Path: {hybrid_result.path_used}, "
                   f"Latency: {hybrid_result.latency_ms:.1f}ms, "
                   f"Confidence: {hybrid_result.confidence:.2f}")
-
-        if hasattr(self, 'intel_logger') and entities:
-            entity_dict = {}
-            for ent in entities:
-                ent_type = getattr(ent, 'type', 'unknown')
-                ent_value = getattr(ent, 'value', str(ent))
-                if ent_type not in entity_dict:
-                    entity_dict[ent_type] = []
-                entity_dict[ent_type].append(ent_value)
-
-            self.intel_logger.log_entity_extraction(
-                message=user_message,
-                extracted_entities=entity_dict,
-                entity_relationships=[],
-                confidence=0.85,
-                duration_ms=3.0,
-                cache_hit=False
-            )
 
         confidence = self.confidence_scorer.score_overall(
             message=user_message,
             intents=intents,
             entities=entities
         )
-
-        if hasattr(self, 'intel_logger'):
-            confidence_value = confidence.score if hasattr(confidence, 'score') else 0.5
-            self.intel_logger.log_confidence_score(
-                overall_confidence=confidence_value,
-                component_scores={
-                    'intent': 0.85,
-                    'entity': 0.80,
-                    'context': 0.90
-                },
-                factors={'message_length': len(user_message)},
-                duration_ms=1.0
-            )
 
         self.context_manager.add_turn(
             role='user',
@@ -813,19 +735,20 @@ Provide a clear instruction describing what you want to accomplish.""",
         }
 
         if self.verbose:
-            logger.info("🧠 Intelligence Analysis:")
-            logger.info(f"  Intents: {[str(i) for i in intents[:3]]}")
-            logger.info(f"  Entities: {len(entities)} found")
-            logger.info(f"  Confidence: {confidence}")
-            logger.info(f"  Recommendation: {intelligence['action_recommendation'][0]}")
+            print("🧠 Intelligence Analysis:")
+            print(f"  Intents: {[str(i) for i in intents[:3]]}")
+            print(f"  Entities: {len(entities)} found")
+            print(f"  Confidence: {confidence}")
+            print(f"  Recommendation: {intelligence['action_recommendation'][0]}")
 
         return intelligence
 
     async def process_message(self, user_message: str) -> str:
+        # Log user message
+        self.session_logger.log_user_message(user_message)
+
         self.analytics.record_user_message()
-
         self.user_prefs.record_interaction_time()
-
         self.user_prefs.record_interaction_style(user_message)
 
         if not self.chat:
@@ -863,7 +786,7 @@ Provide a clear instruction describing what you want to accomplish.""",
                 return "I need more information to proceed. " + clarifications[0]
 
         if self.verbose:
-            logger.info(f"📊 Using intelligence: {explanation}")
+            print(f"📊 Using intelligence: {explanation}")
 
         send_task = asyncio.create_task(self.chat.send_message(message_to_send))
         await self._spinner(send_task, "Thinking")
@@ -885,7 +808,7 @@ Provide a clear instruction describing what you want to accomplish.""",
             # This ensures reliability and prevents parallel execution issues
             if len(function_calls) > 1 and False:  # Parallel execution DISABLED
                 if self.verbose:
-                    logger.info(f"🔄 Found {len(function_calls)} agent calls - executing in parallel")
+                    print(f"🔄 Found {len(function_calls)} agent calls - executing in parallel")
 
                 # Create AgentTask objects
                 tasks = []
@@ -933,7 +856,7 @@ Provide a clear instruction describing what you want to accomplish.""",
 
                 except Exception as e:
                     if self.verbose:
-                        logger.error(f"✗ Parallel execution failed: {e}")
+                        print(f"✗ Parallel execution failed: {e}")
                     # Fall back to sequential on error
                     function_calls = function_calls[:1]  # Take first only
 
@@ -948,7 +871,7 @@ Provide a clear instruction describing what you want to accomplish.""",
 
                 is_valid, validation_error = InputValidator.validate_instruction(instruction)
                 if not is_valid:
-                    logger.error(f"Invalid instruction rejected: {validation_error}")
+                    print(f"Invalid instruction rejected: {validation_error}")
                     function_call_result = {
                         'agent': agent_name,
                         'status': 'error',
@@ -961,7 +884,7 @@ Provide a clear instruction describing what you want to accomplish.""",
                 if not allowed:
                     error_msg = f"🔴 Circuit breaker blocked request to {agent_name}: {reason}"
                     if self.verbose:
-                        logger.error(error_msg)
+                        print(error_msg)
                     result = error_msg
                     # Send error to LLM and continue
                     function_result = {
@@ -988,7 +911,7 @@ Provide a clear instruction describing what you want to accomplish.""",
                     known_solutions = self._query_error_solutions(agent_name, last_error_msg)
 
                     if self.verbose and known_solutions:
-                        logger.info(f"💡 Found {len(known_solutions)} known solution(s) for this error")
+                        print(f"💡 Found {len(known_solutions)} known solution(s) for this error")
 
                 agent_task = asyncio.create_task(
                     self.call_sub_agent(agent_name, instruction, context)
@@ -1005,7 +928,7 @@ Provide a clear instruction describing what you want to accomplish.""",
                     result = agent_task.result()
 
                     if self.verbose:
-                        logger.info(f"✓ {agent_name} completed")
+                        print(f"✓ {agent_name} completed")
 
                     self.duplicate_detector.track_operation(agent_name, instruction, "", success=True)
                     await self.circuit_breaker.record_success(agent_name)
@@ -1039,7 +962,7 @@ Provide a clear instruction describing what you want to accomplish.""",
                         result += f"  • Try again in a few moments\n"
                         result += f"  • Break the operation into smaller steps"
 
-                    logger.warning(f"⚠ {agent_name} agent operation timed out")
+                    print(f"⚠ {agent_name} agent operation timed out")
 
                 except Exception as e:
                     error_str = str(e)
@@ -1092,13 +1015,13 @@ Provide a clear instruction describing what you want to accomplish.""",
                             result += f"\n\n**Next step**: The system will automatically retry this operation."
 
                     if self.verbose:
-                        logger.info(f"[ERROR CLASSIFICATION] Category: {error_classification.category.value}, Retryable: {error_classification.is_retryable}")
+                        print(f"[ERROR CLASSIFICATION] Category: {error_classification.category.value}, Retryable: {error_classification.is_retryable}")
                         if is_duplicate:
-                            logger.warning(f"[DUPLICATE DETECTED] {dup_explanation}")
+                            print(f"[DUPLICATE DETECTED] {dup_explanation}")
                         if is_inconsistent:
-                            logger.warning(f"[INCONSISTENT RESPONSES] Pattern: {dup_pattern}")
+                            print(f"[INCONSISTENT RESPONSES] Pattern: {dup_pattern}")
 
-                    logger.error(f"✗ {agent_name} agent failed: {e}")
+                    print(f"✗ {agent_name} agent failed: {e}")
 
                 function_result = {
                     'name': tool_name,
@@ -1116,24 +1039,24 @@ Provide a clear instruction describing what you want to accomplish.""",
             iteration += 1
 
         if iteration >= max_iterations:
-            logger.warning("⚠ Warning: Reached maximum orchestration iterations")
-            logger.info("💡 Tip: Break complex tasks into smaller steps")
+            print("⚠ Warning: Reached maximum orchestration iterations")
+            print("💡 Tip: Break complex tasks into smaller steps")
 
         if self.operation_count > 0 and self.verbose:
-            logger.info(f"✅ Completed {self.operation_count} operation(s)")
+            print(f"✅ Completed {self.operation_count} operation(s)")
 
         try:
             self.conversation_history = self.chat.get_history()
         except Exception as e:
             if self.verbose:
-                logger.warning(f"⚠ Could not update conversation history: {e}")
+                print(f"⚠ Could not update conversation history: {e}")
 
+        final_response = ""
         if llm_response and llm_response.text:
-            return llm_response.text
-
-        if response and hasattr(response, 'candidates') and response.candidates:
+            final_response = llm_response.text
+        elif response and hasattr(response, 'candidates') and response.candidates:
             try:
-                return response.text
+                final_response = response.text
             except Exception:
                 text_parts = []
                 for part in response.candidates[0].content.parts:
@@ -1141,16 +1064,23 @@ Provide a clear instruction describing what you want to accomplish.""",
                         text_parts.append(part.text)
 
                 if text_parts:
-                    return '\n'.join(text_parts)
+                    final_response = '\n'.join(text_parts)
+                else:
+                    final_response = "⚠️ Task completed but response formatting failed. The operations were executed successfully."
+        else:
+            final_response = "⚠️ Task completed but response formatting failed. The operations were executed successfully."
 
-        return "⚠️ Task completed but response formatting failed. The operations were executed successfully."
+        # Log assistant response
+        self.session_logger.log_assistant_response(final_response)
+
+        return final_response
 
     def _should_retry_operation(self, error_str: str, operation_key: str) -> bool:
         error_classification = ErrorClassifier.classify(error_str)
 
         if not error_classification.is_retryable:
             if self.verbose:
-                logger.info(f"[RETRY DECISION] Non-retryable error ({error_classification.category.value}) - will NOT retry")
+                print(f"[RETRY DECISION] Non-retryable error ({error_classification.category.value}) - will NOT retry")
             return False
 
         retry_context = self._get_retry_context(operation_key)
@@ -1158,12 +1088,12 @@ Provide a clear instruction describing what you want to accomplish.""",
             attempt_num = retry_context['attempt_number']
             if attempt_num >= self.max_retry_attempts:
                 if self.verbose:
-                    logger.info(f"[RETRY DECISION] Max attempts ({self.max_retry_attempts}) reached - will NOT retry")
+                    print(f"[RETRY DECISION] Max attempts ({self.max_retry_attempts}) reached - will NOT retry")
                 return False
 
         if self.verbose:
             category = error_classification.category.value
-            logger.info(f"[RETRY DECISION] Retryable error ({category}) - will retry")
+            print(f"[RETRY DECISION] Retryable error ({category}) - will retry")
 
         return True
 
@@ -1221,7 +1151,7 @@ Provide a clear instruction describing what you want to accomplish.""",
         # Validate instruction
         is_valid, validation_error = InputValidator.validate_instruction(instruction)
         if not is_valid:
-            logger.error(f"Invalid instruction rejected: {validation_error}")
+            print(f"Invalid instruction rejected: {validation_error}")
             raise ValueError(validation_error)
 
         # Check circuit breaker
@@ -1229,7 +1159,7 @@ Provide a clear instruction describing what you want to accomplish.""",
         if not allowed:
             error_msg = f"🔴 Circuit breaker blocked request to {agent_name}: {reason}"
             if self.verbose:
-                logger.error(error_msg)
+                print(error_msg)
             raise CircuitBreakerError(agent_name, error_msg)
 
         # Track retry attempt
@@ -1244,7 +1174,7 @@ Provide a clear instruction describing what you want to accomplish.""",
             )
 
             if self.verbose:
-                logger.info(f"✓ {agent_name} completed")
+                print(f"✓ {agent_name} completed")
 
             # Track success
             self.duplicate_detector.track_operation(agent_name, instruction, "", success=True)
@@ -1270,7 +1200,7 @@ Provide a clear instruction describing what you want to accomplish.""",
             )
 
             if self.verbose:
-                logger.warning(f"⚠ {agent_name} agent operation timed out")
+                print(f"⚠ {agent_name} agent operation timed out")
 
             raise RuntimeError(result)
 
@@ -1292,7 +1222,7 @@ Provide a clear instruction describing what you want to accomplish.""",
             )
 
             if self.verbose:
-                logger.error(f"✗ {agent_name} agent failed: {e}")
+                print(f"✗ {agent_name} agent failed: {e}")
 
             raise RuntimeError(result)
 
@@ -1356,20 +1286,20 @@ Provide a clear instruction describing what you want to accomplish.""",
                 last_error = tracker['errors'][-1]['message']
 
                 if self.verbose:
-                    logger.info(f"✓ Learned: {solution_used} fixed the issue")
+                    print(f"✓ Learned: {solution_used} fixed the issue")
 
     async def cleanup(self):
         if self.verbose:
-            logger.info("Shutting down agents...")
+            print("Shutting down agents...")
 
         for agent_name, agent in list(self.sub_agents.items()):
             try:
                 if hasattr(agent, 'cleanup'):
                     await agent.cleanup()
                 if self.verbose:
-                    logger.info(f"  ✓ {agent_name} shut down")
+                    print(f"  ✓ {agent_name} shut down")
             except Exception as e:
-                logger.error(f"  ✗ Error shutting down {agent_name}: {e}")
+                print(f"  ✗ Error shutting down {agent_name}: {e}")
 
         if hasattr(self, 'analytics'):
             try:
@@ -1381,41 +1311,33 @@ Provide a clear instruction describing what you want to accomplish.""",
                 self.analytics.save_to_file(str(analytics_file))
 
                 if self.verbose:
-                    logger.info(f"  ✓ Analytics saved: {analytics_file}")
-                    logger.info(f"    {self.analytics.generate_summary_report()}")
+                    print(f"  ✓ Analytics saved: {analytics_file}")
+                    print(f"    {self.analytics.generate_summary_report()}")
             except Exception as e:
-                logger.warning(f"Failed to save analytics: {e}")
+                print(f"Failed to save analytics: {e}")
 
         if hasattr(self, 'user_prefs') and hasattr(self, 'prefs_file'):
             try:
                 self.user_prefs.save_to_file(str(self.prefs_file))
                 if self.verbose:
-                    logger.info(f"  ✓ Preferences saved: {self.prefs_file}")
+                    print(f"  ✓ Preferences saved: {self.prefs_file}")
             except Exception as e:
-                logger.warning(f"Failed to save preferences: {e}")
+                print(f"Failed to save preferences: {e}")
 
         if hasattr(self, 'retry_manager') and self.verbose:
             stats = self.retry_manager.get_statistics()
             if stats['total_operations'] > 0:
-                logger.info(f"  📊 Retry stats: {stats['total_operations']} ops, "
+                print(f"  📊 Retry stats: {stats['total_operations']} ops, "
                       f"{stats['avg_retries_per_operation']:.1f} avg retries")
 
         # Print hybrid intelligence statistics
         if hasattr(self, 'hybrid_intelligence') and self.verbose:
-            logger.info("  🚀 Hybrid Intelligence Statistics:")
-            logger.info(f"  {self.hybrid_intelligence.get_performance_summary()}")
+            print("  🚀 Hybrid Intelligence Statistics:")
+            print(f"  {self.hybrid_intelligence.get_performance_summary()}")
 
-        if hasattr(self, 'observability'):
-            try:
-                self.observability.export_all()
-                self.observability.cleanup()
-                if self.verbose:
-                    logger.info("  ✓ Observability data exported")
-            except Exception as e:
-                logger.warning(f"Failed to export observability data: {e}")
-
+        # Close session logger
         if hasattr(self, 'session_logger'):
             self.session_logger.close()
             if self.verbose:
-                logger.info(f"  ✓ Session log saved: {self.session_logger.get_log_path()}")
+                print(f"  ✓ Session log saved: {self.session_logger.get_log_path()}")
 
