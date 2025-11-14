@@ -1,15 +1,7 @@
 """
-UI module for the Multi-Agent Orchestration System
-
-Professional, Claude Code-inspired interface components.
+UI Module - Claude Code-style Terminal Interface
 """
 
-from ui.professional_ui import ClaudeCodeUI, Status, Color
+from .claude_ui import ClaudeUI
 
-__all__ = [
-    'ClaudeCodeUI',
-    'Status',
-    'Color',
-]
-
-__version__ = '5.0.0'
+__all__ = ['ClaudeUI']

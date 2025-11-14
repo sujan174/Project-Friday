@@ -15,7 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from orchestrator import OrchestratorAgent
-from ui.professional_ui import ClaudeCodeUI
+from ui.claude_ui import ClaudeUI
 
 
 async def main():
@@ -25,7 +25,7 @@ async def main():
     simple_mode = "--simple" in sys.argv
 
     # Initialize UI
-    ui = ClaudeCodeUI(verbose=verbose)
+    ui = ClaudeUI(verbose=verbose)
 
     # Initialize orchestrator
     orchestrator = OrchestratorAgent(
@@ -74,7 +74,7 @@ async def main():
         await orchestrator.cleanup()
 
 
-async def run_interactive_session(orchestrator: OrchestratorAgent, ui: ClaudeCodeUI):
+async def run_interactive_session(orchestrator: OrchestratorAgent, ui: ClaudeUI):
     """
     Run the main interactive session loop
 
@@ -136,7 +136,7 @@ async def run_interactive_session(orchestrator: OrchestratorAgent, ui: ClaudeCod
 async def process_with_ui(
     orchestrator: OrchestratorAgent,
     user_message: str,
-    ui: ClaudeCodeUI
+    ui: ClaudeUI
 ) -> str:
     """
     Process a user message with UI feedback
@@ -222,41 +222,9 @@ async def process_with_ui(
         orchestrator.call_sub_agent = original_call_sub_agent
 
 
-def show_help(orchestrator: OrchestratorAgent, ui: ClaudeCodeUI):
+def show_help(orchestrator: OrchestratorAgent, ui: ClaudeUI):
     """Display help information"""
-    ui._write("")
-    ui.print_divider()
-    ui._write(f"{ui._indent()}{Color.BOLD}Available Commands{Color.RESET}")
-    ui._write("")
-    ui._write(f"{ui._indent()}  help  - Show this help")
-    ui._write(f"{ui._indent()}  exit  - Exit the system")
-    ui._write("")
-
-    if orchestrator.agent_capabilities:
-        ui._write(f"{ui._indent()}{Color.BOLD}Available Agents{Color.RESET}")
-        ui._write("")
-
-        for agent_name, capabilities in orchestrator.agent_capabilities.items():
-            display_name = agent_name.replace('_', ' ').title()
-            status = orchestrator.agent_health.get(agent_name, {}).get('status', 'unknown')
-
-            if status == 'healthy':
-                status_icon = f"{Color.GREEN}●{Color.RESET}"
-            elif status == 'degraded':
-                status_icon = f"{Color.YELLOW}●{Color.RESET}"
-            else:
-                status_icon = f"{Color.RED}●{Color.RESET}"
-
-            ui._write(f"{ui._indent()}  {status_icon} {display_name}")
-
-            if ui.verbose and capabilities:
-                for cap in capabilities[:3]:
-                    ui._write(f"{ui._indent()}    {Color.GRAY}• {cap}{Color.RESET}")
-                if len(capabilities) > 3:
-                    ui._write(f"{ui._indent()}    {Color.GRAY}... and {len(capabilities) - 3} more{Color.RESET}")
-
-    ui.print_divider()
-    ui._write("")
+    ui.print_help(orchestrator)
 
 
 def format_duration(seconds: int) -> str:
@@ -273,8 +241,7 @@ def format_duration(seconds: int) -> str:
         return f"{hours}h {minutes}m"
 
 
-# Import Color for help function
-from ui.professional_ui import Color
+# Clean imports - no need for Color anymore
 
 
 if __name__ == "__main__":
