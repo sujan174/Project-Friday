@@ -1,45 +1,15 @@
-from ui.design_system import (
-    ds,
-    DesignSystem,
-    ColorPalette,
-    Typography,
-    Spacing,
-    BoxStyles,
-    Animation,
-    Icons,
-    Semantic,
-    build_status_text,
-    build_badge,
-    build_divider,
-    build_key_value,
-    Layout
-)
+"""
+UI module for the Multi-Agent Orchestration System
 
-from ui.enhanced_terminal_ui import EnhancedTerminalUI, enhanced_ui
-from ui.interactive_editor import InteractiveActionEditor
-from ui.notifications import NotificationManager, ProgressNotification, notifications
+Professional, Claude Code-inspired interface components.
+"""
+
+from ui.professional_ui import ClaudeCodeUI, Status, Color
 
 __all__ = [
-    'ds',
-    'DesignSystem',
-    'ColorPalette',
-    'Typography',
-    'Spacing',
-    'BoxStyles',
-    'Animation',
-    'Icons',
-    'Semantic',
-    'build_status_text',
-    'build_badge',
-    'build_divider',
-    'build_key_value',
-    'Layout',
-    'EnhancedTerminalUI',
-    'enhanced_ui',
-    'InteractiveActionEditor',
-    'NotificationManager',
-    'ProgressNotification',
-    'notifications',
+    'ClaudeCodeUI',
+    'Status',
+    'Color',
 ]
 
-__version__ = '4.0.0'
+__version__ = '5.0.0'

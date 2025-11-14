@@ -61,3 +61,11 @@ htmlcov/
 .coverage.*
 coverage.xml
 *.cover
+
+# Credentials - OAuth tokens and secrets (DO NOT COMMIT!)
+credentials/gmail_token.json
+credentials/gmail.json
+credentials/*_token.json
+credentials/*.pickle
+credentials/*_credentials.json
+gcp-oauth.keys.json

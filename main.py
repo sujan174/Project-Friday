@@ -1,31 +1,46 @@
 #!/usr/bin/env python3
+"""
+Main entry point for the Multi-Agent Orchestration System
+
+A professional, Claude Code-inspired interface for managing and coordinating
+specialized AI agents across multiple platforms.
+"""
+
 import asyncio
 import sys
+import time
 from pathlib import Path
 
+# Add project root to path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from orchestrator import OrchestratorAgent
-from ui.enhanced_terminal_ui import EnhancedTerminalUI
+from ui.professional_ui import ClaudeCodeUI
 
 
 async def main():
+    """Main entry point"""
+    # Parse command-line arguments
     verbose = "--verbose" in sys.argv or "-v" in sys.argv
-    simple_ui = "--simple" in sys.argv
+    simple_mode = "--simple" in sys.argv
 
-    if simple_ui:
-        orchestrator = OrchestratorAgent(connectors_dir="connectors", verbose=verbose)
-        await orchestrator.run_interactive()
-        return
+    # Initialize UI
+    ui = ClaudeCodeUI(verbose=verbose)
 
-    ui = EnhancedTerminalUI(verbose=verbose)
+    # Initialize orchestrator
+    orchestrator = OrchestratorAgent(
+        connectors_dir="connectors",
+        verbose=verbose
+    )
 
     try:
-        orchestrator = OrchestratorAgent(connectors_dir="connectors", verbose=False)
-        ui.print_header(orchestrator.session_id)
-        ui.console.print("[bold cyan]🔌 Discovering Agents...[/bold cyan]\n")
+        # Display welcome
+        ui.print_welcome(orchestrator.session_id)
+
+        # Discover and load agents (silent)
         await orchestrator.discover_and_load_agents()
 
+        # Display loaded agents
         loaded_agents = []
         failed_agents = []
 
@@ -40,29 +55,12 @@ async def main():
             else:
                 failed_agents.append(agent_name)
 
-        if loaded_agents:
-            from rich.table import Table
-            from rich import box
+        ui.print_agents_loaded(loaded_agents)
 
-            table = Table(
-                show_header=True,
-                header_style="bold cyan",
-                border_style="dim",
-                box=box.ROUNDED
-            )
-            table.add_column("Agent", style="white")
-            table.add_column("Capabilities", style="dim")
+        if failed_agents:
+            ui.print_agents_failed(len(failed_agents))
 
-            for agent in loaded_agents:
-                caps_text = ", ".join(agent['capabilities'])
-                if agent['total'] > 3:
-                    caps_text += f" (+{agent['total']-3} more)"
-                table.add_row(agent['name'].title(), caps_text)
-
-            ui.console.print(table)
-            ui.console.print()
-
-        ui.print_loaded_summary(len(loaded_agents), len(failed_agents))
+        # Start interactive session
         await run_interactive_session(orchestrator, ui)
 
     except KeyboardInterrupt:
@@ -71,39 +69,58 @@ async def main():
         ui.print_error(str(e))
         if verbose:
             import traceback
-            ui.print_error(str(e), traceback.format_exc())
+            traceback.print_exc()
     finally:
-        if 'orchestrator' in locals():
-            await orchestrator.cleanup()
+        await orchestrator.cleanup()
 
 
-async def run_interactive_session(orchestrator: OrchestratorAgent, ui: EnhancedTerminalUI):
+async def run_interactive_session(orchestrator: OrchestratorAgent, ui: ClaudeCodeUI):
+    """
+    Run the main interactive session loop
+
+    Args:
+        orchestrator: The orchestration agent
+        ui: The user interface
+    """
     message_count = 0
+    session_start = time.time()
 
     while True:
         try:
+            # Display prompt
             ui.print_prompt()
             user_input = input().strip()
 
+            # Handle exit commands
             if user_input.lower() in ['exit', 'quit', 'bye', 'q']:
-                import time
-                duration = time.time() - orchestrator.analytics.start_time if hasattr(orchestrator, 'analytics') else 0
+                # Calculate session stats
+                duration = int(time.time() - session_start)
                 stats = {
-                    'duration': f"{int(duration)}s" if duration else "N/A",
+                    'duration': format_duration(duration),
                     'message_count': message_count,
-                    'agent_calls': sum(ui.agent_calls.values()),
-                    'success_rate': "N/A"
+                    'agent_calls': ui.agent_call_count,
+                    'success_rate': "N/A"  # Can be calculated from analytics
                 }
-                ui.print_session_stats(stats)
+                ui.print_session_summary(stats)
                 ui.print_goodbye()
                 break
 
+            # Skip empty input
             if not user_input:
                 continue
 
+            # Handle help command
+            if user_input.lower() == 'help':
+                show_help(orchestrator, ui)
+                continue
+
+            # Process the message
             message_count += 1
-            ui.print_thinking()
+            ui.start_thinking()
+
             response = await process_with_ui(orchestrator, user_input, ui)
+
+            # Display response
             ui.print_response(response)
 
         except KeyboardInterrupt:
@@ -113,35 +130,151 @@ async def run_interactive_session(orchestrator: OrchestratorAgent, ui: EnhancedT
             ui.print_error(str(e))
             if ui.verbose:
                 import traceback
-                ui.print_error(str(e), traceback.format_exc())
+                traceback.print_exc()
 
 
 async def process_with_ui(
     orchestrator: OrchestratorAgent,
     user_message: str,
-    ui: EnhancedTerminalUI
+    ui: ClaudeCodeUI
 ) -> str:
+    """
+    Process a user message with UI feedback
+
+    This wraps the orchestrator's call_sub_agent method to provide
+    real-time UI updates as agents are called.
+
+    Args:
+        orchestrator: The orchestration agent
+        user_message: The user's message
+        ui: The user interface
+
+    Returns:
+        The orchestrator's response
+    """
+    # Store original method
     original_call_sub_agent = orchestrator.call_sub_agent
 
-    async def wrapped_call_sub_agent(agent_name: str, instruction: str, context: dict = None):
-        ui.print_tool_call(agent_name, "processing...")
+    # Track retry attempts
+    retry_counts: dict = {}
 
+    async def wrapped_call_sub_agent(agent_name: str, instruction: str, context: dict = None):
+        """Wrapped version that provides UI feedback"""
+
+        # Track retries
+        retry_key = f"{agent_name}:{instruction[:50]}"
+        retry_counts[retry_key] = retry_counts.get(retry_key, 0) + 1
+
+        # Show retry if this is not the first attempt
+        if retry_counts[retry_key] > 1:
+            ui.show_retry(agent_name, retry_counts[retry_key], orchestrator.max_retry_attempts)
+
+        # Show agent call start
+        if retry_counts[retry_key] == 1:
+            ui.start_agent_call(agent_name, instruction)
+
+        # Call the actual agent
+        start_time = time.time()
         try:
             result = await original_call_sub_agent(agent_name, instruction, context)
-            success = not (result.startswith("Error") or result.startswith("⚠️"))
-            ui.print_tool_result(success, result[:50] if success else result[:100])
+
+            # Check if successful
+            success = not (
+                result.startswith("Error") or
+                result.startswith("⚠️") or
+                result.startswith("❌")
+            )
+
+            duration_ms = (time.time() - start_time) * 1000
+
+            # Show completion
+            if retry_counts[retry_key] == 1 or success:
+                ui.end_agent_call(
+                    agent_name,
+                    success=success,
+                    duration_ms=duration_ms,
+                    message=result if success else result[:200]
+                )
+
             return result
+
         except Exception as e:
-            ui.print_tool_result(False, str(e)[:100])
+            duration_ms = (time.time() - start_time) * 1000
+            ui.end_agent_call(
+                agent_name,
+                success=False,
+                duration_ms=duration_ms,
+                message=str(e)
+            )
             raise
 
+    # Replace the method temporarily
     orchestrator.call_sub_agent = wrapped_call_sub_agent
 
     try:
+        # Process the message
         response = await orchestrator.process_message(user_message)
+
         return response
+
     finally:
+        # Restore original method
         orchestrator.call_sub_agent = original_call_sub_agent
+
+
+def show_help(orchestrator: OrchestratorAgent, ui: ClaudeCodeUI):
+    """Display help information"""
+    ui._write("")
+    ui.print_divider()
+    ui._write(f"{ui._indent()}{Color.BOLD}Available Commands{Color.RESET}")
+    ui._write("")
+    ui._write(f"{ui._indent()}  help  - Show this help")
+    ui._write(f"{ui._indent()}  exit  - Exit the system")
+    ui._write("")
+
+    if orchestrator.agent_capabilities:
+        ui._write(f"{ui._indent()}{Color.BOLD}Available Agents{Color.RESET}")
+        ui._write("")
+
+        for agent_name, capabilities in orchestrator.agent_capabilities.items():
+            display_name = agent_name.replace('_', ' ').title()
+            status = orchestrator.agent_health.get(agent_name, {}).get('status', 'unknown')
+
+            if status == 'healthy':
+                status_icon = f"{Color.GREEN}●{Color.RESET}"
+            elif status == 'degraded':
+                status_icon = f"{Color.YELLOW}●{Color.RESET}"
+            else:
+                status_icon = f"{Color.RED}●{Color.RESET}"
+
+            ui._write(f"{ui._indent()}  {status_icon} {display_name}")
+
+            if ui.verbose and capabilities:
+                for cap in capabilities[:3]:
+                    ui._write(f"{ui._indent()}    {Color.GRAY}• {cap}{Color.RESET}")
+                if len(capabilities) > 3:
+                    ui._write(f"{ui._indent()}    {Color.GRAY}... and {len(capabilities) - 3} more{Color.RESET}")
+
+    ui.print_divider()
+    ui._write("")
+
+
+def format_duration(seconds: int) -> str:
+    """Format duration in seconds to human-readable string"""
+    if seconds < 60:
+        return f"{seconds}s"
+    elif seconds < 3600:
+        minutes = seconds // 60
+        secs = seconds % 60
+        return f"{minutes}m {secs}s"
+    else:
+        hours = seconds // 3600
+        minutes = (seconds % 3600) // 60
+        return f"{hours}h {minutes}m"
+
+
+# Import Color for help function
+from ui.professional_ui import Color
 
 
 if __name__ == "__main__":

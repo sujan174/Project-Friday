@@ -17,7 +17,7 @@ import asyncio
 from dataclasses import dataclass
 import re
 
-from connectors.base_connector import BaseConnector, ConnectorMetadata, ToolDefinition
+from connectors.base_agent import BaseConnector, ConnectorMetadata, ToolDefinition
 
 
 @dataclass
