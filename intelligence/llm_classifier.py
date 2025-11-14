@@ -93,7 +93,7 @@ Analyze the user's message and provide a structured classification with high con
                 self.cache_hits += 1
                 if self.verbose:
                     # info(f"Cache hit for message (hit rate: {self.get_cache_hit_rate():.1%})")
-                return result
+                    return result
             else:
                 # Expired, remove from cache
                 del self.cache[cache_key]
@@ -175,16 +175,16 @@ Be precise and confident. If the message is clear, confidence should be > 0.85."
                 # debug(f"Classification result: {json.dumps(response, indent=2)}")
 
             # Parse response into structured result
-            result = LLMIntentResult(
-                primary_intent=response.get('primary_intent', 'UNKNOWN'),
-                secondary_intents=response.get('secondary_intents', []),
-                confidence=response.get('confidence', 0.5),
-                entities=response.get('entities', []),
-                reasoning=response.get('reasoning', ''),
-                ambiguities=response.get('ambiguities', []),
-                is_high_risk=response.get('is_high_risk', False),
-                suggested_clarifications=response.get('suggested_clarifications', [])
-            )
+                result = LLMIntentResult(
+                    primary_intent=response.get('primary_intent', 'UNKNOWN'),
+                    secondary_intents=response.get('secondary_intents', []),
+                    confidence=response.get('confidence', 0.5),
+                    entities=response.get('entities', []),
+                    reasoning=response.get('reasoning', ''),
+                    ambiguities=response.get('ambiguities', []),
+                    is_high_risk=response.get('is_high_risk', False),
+                    suggested_clarifications=response.get('suggested_clarifications', [])
+                )
 
             # Cache the result
             self._add_to_cache(message, result)
