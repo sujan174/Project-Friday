@@ -43,11 +43,13 @@ class FastKeywordFilter:
                 'min_confidence': 0.95  # Higher confidence for destructive ops
             },
             IntentType.READ: {
-                'keywords': ['show', 'get', 'list', 'display', 'view', 'fetch'],
+                'keywords': ['show', 'get', 'list', 'display', 'view', 'fetch', 'find'],
                 'patterns': [
                     r'\bshow\s+me',
-                    r'\bget\s+(the|all|my)?\s*(issues|prs|messages)',
-                    r'\blist\s+(all|my)?\s*(issues|prs|channels)',
+                    r'\bget\s+(the|all|my)?\s*(issues|prs|messages|tasks?|tickets?)',
+                    r'\blist\s+(all\s+)?(my\s+)?(issues|prs|channels|tasks?|tickets?)',
+                    r'\bfetch\s+(the|all|my)?\s*(issues|prs|tasks?|tickets?)',
+                    r'\b(my|the)\s+(issues|tasks?|tickets?)\s+(from|in)',
                 ],
                 'min_confidence': 0.85
             },
@@ -120,6 +122,7 @@ class FastKeywordFilter:
         """Convert to legacy Intent format"""
         # Simple entity extraction for common patterns
         entities = []
+        message_lower = message.lower()
 
         # Extract issue keys (KAN-123, PROJ-456, etc.)
         issue_matches = re.findall(r'\b([A-Z]+-\d+)\b', message)
@@ -129,6 +132,33 @@ class FastKeywordFilter:
                 value=issue_key,
                 confidence=0.95
             ))
+
+        # Extract project names (uppercase words, 2-10 chars)
+        # Look for patterns like "from KAN", "in JIRA", "project ABC"
+        project_matches = re.findall(r'\b(?:from|in|project|to)\s+([A-Z]{2,10})\b', message)
+        for project in project_matches:
+            # Avoid duplicates from issue keys
+            if not any(e.value == project for e in entities):
+                entities.append(Entity(
+                    type=EntityType.PROJECT,
+                    value=project,
+                    confidence=0.8
+                ))
+
+        # Extract service/platform keywords (jira, github, slack, notion)
+        service_keywords = {
+            'jira': EntityType.PROJECT,
+            'github': EntityType.REPOSITORY,
+            'slack': EntityType.CHANNEL,
+            'notion': EntityType.RESOURCE
+        }
+        for keyword, entity_type in service_keywords.items():
+            if keyword in message_lower:
+                entities.append(Entity(
+                    type=entity_type,
+                    value=keyword,
+                    confidence=0.7
+                ))
 
         # Extract PR numbers (#123)
         pr_matches = re.findall(r'#(\d+)', message)

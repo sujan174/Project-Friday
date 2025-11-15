@@ -928,14 +928,19 @@ Provide a concise summary that gives the user exactly what they need to know."""
         message_to_send = intelligence.get('resolved_message', user_message)
 
         action, explanation = intelligence['action_recommendation']
+        risk_level = intelligence['risk_level']
 
+        # Don't ask for clarification on LOW risk operations (READ/SEARCH/ANALYZE)
+        # Let the LLM agent handle these - it has better context extraction
         if action == 'clarify' and not self.verbose:
-            clarifications = self.confidence_scorer.suggest_clarifications(
-                intelligence['confidence'],
-                intelligence['intents']
-            )
-            if clarifications:
-                return "I need more information to proceed. " + clarifications[0]
+            # Skip clarification for low-risk operations
+            if risk_level != RiskLevel.LOW:
+                clarifications = self.confidence_scorer.suggest_clarifications(
+                    intelligence['confidence'],
+                    intelligence['intents']
+                )
+                if clarifications:
+                    return "I need more information to proceed. " + clarifications[0]
 
         # Handle confirmation requirement for risky operations
         if action == 'confirm':
