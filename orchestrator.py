@@ -930,17 +930,9 @@ Provide a concise summary that gives the user exactly what they need to know."""
         action, explanation = intelligence['action_recommendation']
         risk_level = intelligence['risk_level']
 
-        # Don't ask for clarification on LOW risk operations (READ/SEARCH/ANALYZE)
-        # Let the LLM agent handle these - it has better context extraction
-        if action == 'clarify' and not self.verbose:
-            # Skip clarification for low-risk operations
-            if risk_level != RiskLevel.LOW:
-                clarifications = self.confidence_scorer.suggest_clarifications(
-                    intelligence['confidence'],
-                    intelligence['intents']
-                )
-                if clarifications:
-                    return "I need more information to proceed. " + clarifications[0]
+        # Note: We no longer ask for clarification pre-emptively
+        # The LLM is smart enough to ask for clarification when it actually needs it
+        # This prevents blocking conversational queries and simple questions
 
         # Handle confirmation requirement for risky operations
         if action == 'confirm':
