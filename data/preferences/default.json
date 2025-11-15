@@ -5,11 +5,11 @@
     "prefers_verbose": false,
     "prefers_technical": true,
     "prefers_emojis": false,
-    "sample_count": 173,
+    "sample_count": 187,
     "confidence": 0.9
   },
   "working_hours": {
-    "typical_start_hour": 1,
+    "typical_start_hour": 3,
     "typical_end_hour": 22,
     "active_days": [
       0,
@@ -20,11 +20,11 @@
       5
     ],
     "timezone_offset": 0,
-    "sample_count": 173,
+    "sample_count": 187,
     "confidence": 0.9
   },
   "statistics": {
     "total_interactions": 0
   },
-  "saved_at": 1763153631.023388
+  "saved_at": 1763189769.602931
 }
