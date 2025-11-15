@@ -403,7 +403,7 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
 
             try:
                 agent_instance = agent_class(
-                    verbose=self.verbose,
+                    verbose=False,  # Always suppress agent verbosity during init
                     shared_context=self.shared_context,
                     knowledge_base=self.knowledge_base,
                     llm=self.llm,
@@ -412,18 +412,18 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
             except TypeError:
                 try:
                     agent_instance = agent_class(
-                        verbose=self.verbose,
+                        verbose=False,  # Always suppress agent verbosity during init
                         shared_context=self.shared_context,
                         knowledge_base=self.knowledge_base
                     )
                 except TypeError:
                     try:
-                        agent_instance = agent_class(verbose=self.verbose)
+                        agent_instance = agent_class(verbose=False)
                     except TypeError:
                         agent_instance = agent_class()
 
             if hasattr(agent_instance, 'verbose'):
-                agent_instance.verbose = self.verbose
+                agent_instance.verbose = False  # Suppress during init
 
             # Inject API cache if agent supports it
             if self.hybrid_cache and hasattr(agent_instance, 'set_api_cache'):
@@ -431,10 +431,16 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
                 if self.verbose:
                     messages.append(f"  ✓ Injected API cache into {agent_name}")
 
-            try:
-                await agent_instance.initialize()
+            # Suppress all output during agent initialization
+            import io
+            import contextlib
 
-                capabilities = await agent_instance.get_capabilities()
+            # Create a context manager to suppress stdout and stderr
+            try:
+                with contextlib.redirect_stdout(io.StringIO()), \
+                     contextlib.redirect_stderr(io.StringIO()):
+                    await agent_instance.initialize()
+                    capabilities = await agent_instance.get_capabilities()
 
                 if self.verbose:
                     messages.append(f"  ✓ Loaded {agent_name} with {len(capabilities)} capabilities")
@@ -446,15 +452,14 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
                 return (agent_name, agent_instance, capabilities, messages)
 
             except Exception as init_error:
-                messages.append(f"  ✗ Failed to initialize {agent_name}: {init_error}")
+                # Silently handle initialization errors unless verbose
                 if self.verbose:
-                    messages.append(f"    {traceback.format_exc()}")
+                    messages.append(f"  ✗ Failed to initialize {agent_name}: {init_error}")
                 try:
                     if hasattr(agent_instance, 'cleanup'):
                         await agent_instance.cleanup()
-                except Exception as cleanup_err:
-                    if self.verbose:
-                        print(f"Failed to cleanup {agent_name}: {cleanup_err}")
+                except Exception:
+                    pass  # Silently ignore cleanup errors
                 return (agent_name, None, None, messages)
 
         except Exception as e:
@@ -497,14 +502,17 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
 
             if isinstance(result, BaseException):
                 failed += 1
-                print(f"Exception during loading: {result}")
+                # Silently count exceptions unless verbose
                 if self.verbose:
+                    print(f"Exception during loading: {result}")
                     print(f"  Type: {type(result).__name__}")
                 continue
 
             if not isinstance(result, tuple) or len(result) != 4:
                 failed += 1
-                print(f"Invalid result from agent loading: {result}")
+                # Silently count invalid results unless verbose
+                if self.verbose:
+                    print(f"Invalid result from agent loading: {result}")
                 continue
 
             agent_name, agent_instance, capabilities, messages = result

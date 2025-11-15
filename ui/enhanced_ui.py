@@ -95,22 +95,22 @@ class EnhancedUI:
         if not RICH_AVAILABLE:
             return self._fallback_method('print_welcome', session_id)
 
+        self.console.clear()  # Clear screen for clean start
         self.console.print()
 
-        # Create title with gradient effect
-        title = Text()
-        title.append("Project ", style="bold")
-        title.append("Aerius", style=f"bold {self.colors['primary']}")
+        # Create a beautiful welcome panel
+        welcome_text = Text()
+        welcome_text.append("Project Aerius\n", style=f"bold {self.colors['primary']}")
+        welcome_text.append("Multi-Agent Orchestration System\n\n", style=f"{self.colors['muted']}")
+        welcome_text.append(f"Session: {session_id[:12]}", style=f"{self.colors['dim']}")
 
-        self.console.print(title, justify="left")
-        self.console.print(
-            f"[{self.colors['muted']}]Multi-Agent Orchestration System[/]",
-            justify="left"
+        welcome_panel = Panel(
+            welcome_text,
+            border_style=self.colors['primary'],
+            box=box.DOUBLE,
+            padding=(1, 2),
         )
-        self.console.print(
-            f"[{self.colors['dim']}]Session {session_id[:12]}[/]",
-            justify="left"
-        )
+        self.console.print(welcome_panel)
         self.console.print()
 
     def print_agents_loaded(self, agents: List[dict]):
@@ -165,8 +165,11 @@ class EnhancedUI:
             return self._fallback_method('print_prompt')
 
         self.message_count += 1
+
+        # Simple, elegant prompt like Gemini CLI
         prompt_text = Text()
-        prompt_text.append("❯ ", style=f"bold {self.colors['primary']}")
+        prompt_text.append("You", style=f"bold {self.colors['primary']}")
+        prompt_text.append("\n❯ ", style=f"{self.colors['muted']}")
         self.console.print(prompt_text, end="")
 
     # ============================================================================
@@ -273,7 +276,17 @@ class EnhancedUI:
             code_theme="monokai",
             inline_code_lexer="python",
         )
-        self.console.print(md)
+
+        # Wrap in a beautiful panel like Gemini CLI
+        panel = Panel(
+            md,
+            border_style=self.colors['primary'],
+            box=box.ROUNDED,
+            padding=(1, 2),
+            title=f"[bold {self.colors['primary']}]Aerius[/bold]",
+            title_align="left",
+        )
+        self.console.print(panel)
         self.console.print()
 
     def print_code(self, code: str, language: str = "python", line_numbers: bool = True):
