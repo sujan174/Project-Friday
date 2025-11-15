@@ -173,6 +173,12 @@ class EnhancedUI:
     # Agent Operations with Spinners
     # ============================================================================
 
+    def start_thinking(self):
+        """Start thinking indicator - silent for backward compatibility"""
+        # Thinking is handled by context managers (thinking_spinner)
+        # This method exists for backward compatibility with main.py
+        pass
+
     @contextmanager
     def thinking_spinner(self, message: str = "Thinking"):
         """Context manager for thinking spinner"""
