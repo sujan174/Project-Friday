@@ -1,0 +1,10 @@
+# Core Dependencies
+google-generativeai>=0.7.0
+python-dotenv>=1.0.0
+numpy>=1.24.0
+
+# UI Enhancement
+rich>=13.7.0
+
+# Optional: For enhanced CLI features
+prompt-toolkit>=3.0.43

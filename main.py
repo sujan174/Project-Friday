@@ -15,7 +15,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from orchestrator import OrchestratorAgent
-from ui.claude_ui import ClaudeUI
+
+# Try to import enhanced UI, fall back to basic UI if Rich is not available
+try:
+    from ui.enhanced_ui import EnhancedUI
+    UI_CLASS = EnhancedUI
+except ImportError:
+    from ui.claude_ui import ClaudeUI
+    UI_CLASS = ClaudeUI
+    print("Note: Install 'rich' for enhanced UI experience (pip install -r requirements.txt)")
 
 
 async def main():
@@ -24,8 +32,12 @@ async def main():
     verbose = "--verbose" in sys.argv or "-v" in sys.argv
     simple_mode = "--simple" in sys.argv
 
-    # Initialize UI
-    ui = ClaudeUI(verbose=verbose)
+    # Initialize UI (use simple UI if requested, otherwise use enhanced)
+    if simple_mode:
+        from ui.claude_ui import ClaudeUI
+        ui = ClaudeUI(verbose=verbose)
+    else:
+        ui = UI_CLASS(verbose=verbose)
 
     # Initialize orchestrator
     orchestrator = OrchestratorAgent(
@@ -74,7 +86,7 @@ async def main():
         await orchestrator.cleanup()
 
 
-async def run_interactive_session(orchestrator: OrchestratorAgent, ui: ClaudeUI):
+async def run_interactive_session(orchestrator: OrchestratorAgent, ui):
     """
     Run the main interactive session loop
 
@@ -114,6 +126,16 @@ async def run_interactive_session(orchestrator: OrchestratorAgent, ui: ClaudeUI)
                 show_help(orchestrator, ui)
                 continue
 
+            # Handle stats command
+            if user_input.lower() in ['stats', 'statistics', 'status']:
+                show_stats_command(orchestrator, ui)
+                continue
+
+            # Handle agents command
+            if user_input.lower() == 'agents':
+                show_help(orchestrator, ui)
+                continue
+
             # Process the message
             message_count += 1
             ui.start_thinking()
@@ -136,7 +158,7 @@ async def run_interactive_session(orchestrator: OrchestratorAgent, ui: ClaudeUI)
 async def process_with_ui(
     orchestrator: OrchestratorAgent,
     user_message: str,
-    ui: ClaudeUI
+    ui
 ) -> str:
     """
     Process a user message with UI feedback
@@ -222,9 +244,35 @@ async def process_with_ui(
         orchestrator.call_sub_agent = original_call_sub_agent
 
 
-def show_help(orchestrator: OrchestratorAgent, ui: ClaudeUI):
+def show_help(orchestrator: OrchestratorAgent, ui):
     """Display help information"""
     ui.print_help(orchestrator)
+
+
+def show_stats_command(orchestrator: OrchestratorAgent, ui):
+    """Display session statistics"""
+    # Get analytics from orchestrator if available
+    stats = {
+        'message_count': getattr(ui, 'message_count', 0),
+        'agent_calls': getattr(ui, 'agent_call_count', 0),
+    }
+
+    # Add agent-specific stats if available
+    if hasattr(orchestrator, 'analytics_collector') and orchestrator.analytics_collector:
+        agent_stats = {}
+        for agent_name in orchestrator.agent_capabilities.keys():
+            metrics = orchestrator.analytics_collector.get_agent_metrics(agent_name)
+            if metrics and metrics.total_calls > 0:
+                agent_stats[agent_name] = {
+                    'calls': metrics.total_calls,
+                    'avg_time_ms': metrics.p50_latency_ms,
+                    'success_rate': (metrics.successes / metrics.total_calls * 100) if metrics.total_calls > 0 else 0
+                }
+
+        if agent_stats:
+            stats['agent_stats'] = agent_stats
+
+    ui.print_session_summary(stats)
 
 
 def format_duration(seconds: int) -> str:
