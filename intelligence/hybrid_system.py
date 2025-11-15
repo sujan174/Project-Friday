@@ -26,8 +26,8 @@ class HybridIntelligenceResult:
     path_used: str  # "fast" or "llm"
     latency_ms: float
     reasoning: Optional[str] = None
-    ambiguities: List[str] = None
-    suggested_clarifications: List[str] = None
+    ambiguities: Optional[List[str]] = None
+    suggested_clarifications: Optional[List[str]] = None
 
 
 class HybridIntelligenceSystem:
