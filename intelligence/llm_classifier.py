@@ -24,7 +24,7 @@ class LLMIntentResult:
     reasoning: str
     ambiguities: List[str]
     is_high_risk: bool = False
-    suggested_clarifications: List[str] = None
+    suggested_clarifications: Optional[List[str]] = None
 
 
 class LLMIntentClassifier:
