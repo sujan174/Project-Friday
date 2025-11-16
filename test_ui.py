@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Quick test script for the Enhanced UI
+Quick test script for the Terminal UI
 
 This script demonstrates the UI features without requiring full agent setup.
 """
@@ -14,12 +14,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 try:
-    from ui.enhanced_ui import EnhancedUI
-    print("✓ Enhanced UI imported successfully")
+    from ui import TerminalUI
+    print("✓ Terminal UI imported successfully")
     UI_AVAILABLE = True
 except ImportError as e:
-    print(f"✗ Enhanced UI not available: {e}")
-    print("  Run: pip install rich")
+    print(f"✗ Terminal UI not available: {e}")
     UI_AVAILABLE = False
     sys.exit(1)
 
@@ -27,10 +26,10 @@ except ImportError as e:
 def test_basic_ui():
     """Test basic UI features"""
     print("\n" + "="*60)
-    print("Testing Enhanced UI - Basic Features")
+    print("Testing Terminal UI - Basic Features")
     print("="*60 + "\n")
 
-    ui = EnhancedUI(verbose=True)
+    ui = TerminalUI(verbose=True)
 
     # Test welcome
     print("1. Testing welcome screen...")
@@ -97,10 +96,10 @@ Regular paragraph with more text to show rendering.
 async def test_advanced_ui():
     """Test advanced UI features with async"""
     print("\n" + "="*60)
-    print("Testing Enhanced UI - Advanced Features")
+    print("Testing Terminal UI - Advanced Features")
     print("="*60 + "\n")
 
-    ui = EnhancedUI(verbose=True)
+    ui = TerminalUI(verbose=True)
 
     # Test thinking spinner
     print("1. Testing thinking spinner...")
@@ -157,10 +156,10 @@ async def test_advanced_ui():
 async def test_help_display():
     """Test help display with mock orchestrator"""
     print("\n" + "="*60)
-    print("Testing Enhanced UI - Help Display")
+    print("Testing Terminal UI - Help Display")
     print("="*60 + "\n")
 
-    ui = EnhancedUI(verbose=True)
+    ui = TerminalUI(verbose=True)
 
     # Create mock orchestrator
     class MockOrchestrator:
@@ -188,7 +187,7 @@ async def test_help_display():
 def main():
     """Run all tests"""
     print("\n╔════════════════════════════════════════════════════════╗")
-    print("║         Project Aerius - Enhanced UI Test Suite       ║")
+    print("║         Project Aerius - Terminal UI Test Suite       ║")
     print("╚════════════════════════════════════════════════════════╝")
 
     try:
@@ -204,7 +203,7 @@ def main():
         asyncio.run(test_help_display())
 
         # Final message
-        ui = EnhancedUI(verbose=False)
+        ui = TerminalUI(verbose=False)
         ui.print_goodbye()
 
         print("\n✓ All UI tests completed successfully!\n")

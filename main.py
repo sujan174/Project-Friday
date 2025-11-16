@@ -15,29 +15,16 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from orchestrator import OrchestratorAgent
-
-# Try to import enhanced UI, fall back to basic UI if Rich is not available
-try:
-    from ui.enhanced_ui import EnhancedUI
-    UI_CLASS = EnhancedUI
-except ImportError:
-    from ui.claude_ui import ClaudeUI
-    UI_CLASS = ClaudeUI
-    print("Note: Install 'rich' for enhanced UI experience (pip install -r requirements.txt)")
+from ui import TerminalUI
 
 
 async def main():
     """Main entry point"""
     # Parse command-line arguments
     verbose = "--verbose" in sys.argv or "-v" in sys.argv
-    simple_mode = "--simple" in sys.argv
 
-    # Initialize UI (use simple UI if requested, otherwise use enhanced)
-    if simple_mode:
-        from ui.claude_ui import ClaudeUI
-        ui = ClaudeUI(verbose=verbose)
-    else:
-        ui = UI_CLASS(verbose=verbose)
+    # Initialize UI
+    ui = TerminalUI(verbose=verbose)
 
     # Initialize orchestrator
     orchestrator = OrchestratorAgent(
