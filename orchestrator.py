@@ -524,183 +524,213 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
             return (agent_name, None, None, messages)
 
     async def discover_and_load_agents(self):
-        # Always show that we're discovering agents (helps debug startup hangs)
-        print("Discovering agents...", flush=True)
+        # Suppress asyncio warnings about unhandled exceptions in cancelled tasks
+        # This happens with MCP stdio cleanup when tasks are cancelled
+        import sys
+        import logging
 
-        if self.verbose:
-            print("="*60)
-            print("Discovering Agent Connectors...")
-            print("="*60)
+        # Set up exception handler to suppress MCP cleanup errors
+        loop = asyncio.get_event_loop()
+        original_exception_handler = loop.get_exception_handler()
 
-        if not self.connectors_dir.exists():
-            print(f"Connectors directory '{self.connectors_dir}' not found!")
-            print("Creating directory...")
-            self.connectors_dir.mkdir(parents=True, exist_ok=True)
-            return
-
-        connector_files = list(self.connectors_dir.glob("*_agent.py"))
-
-        if not connector_files:
-            print(f"No agent connectors found in '{self.connectors_dir}'")
-            print("Expected files matching pattern: *_agent.py")
-            return
-
-        if self.verbose:
-            print(f"Loading {len(connector_files)} agent(s) in parallel...")
-
-        # Check for explicitly disabled agents via environment variable
-        # Example: DISABLED_AGENTS="slack,jira,github" to disable specific agents
-        disabled_agents_str = os.environ.get("DISABLED_AGENTS", "")
-        disabled_agents = [a.strip().lower() for a in disabled_agents_str.split(",") if a.strip()]
-
-        if disabled_agents and self.verbose:
-            print(f"Disabled agents: {', '.join(disabled_agents)}")
-
-        # Wrap each agent load with a timeout to prevent hanging
-        # Uses task-based isolation to prevent cancellation propagation
-        async def load_with_timeout(file_path):
-            agent_name = file_path.stem.replace("_agent", "")
-
-            # Skip explicitly disabled agents
-            if agent_name.lower() in disabled_agents:
-                print(f"⊘ {agent_name}: Disabled via DISABLED_AGENTS env var", flush=True)
-                return (agent_name, None, None, [f"  ⊘ {agent_name} disabled by user configuration"])
-
-            # Create isolated task for this agent to prevent cancellation propagation
-            task = asyncio.create_task(self._load_single_agent(file_path))
-
-            try:
-                # Wait for task with timeout using asyncio.wait (not wait_for)
-                # This gives us more control over cancellation
-                done, pending = await asyncio.wait([task], timeout=10.0)
-
-                if task in done:
-                    # Task completed - return result or handle exception
-                    try:
-                        return task.result()
-                    except Exception as e:
-                        print(f"✗ {agent_name}: Failed - {type(e).__name__}", flush=True)
-                        if self.verbose:
-                            print(f"  Details: {str(e)[:200]}", flush=True)
-                        return (agent_name, None, None, [f"  ✗ {agent_name} failed: {e}"])
-                else:
-                    # Timeout - cancel task and handle cleanup
-                    print(f"✗ {agent_name}: Timed out after 10s", flush=True)
-                    print(f"  Hint: Agent may be waiting for credentials or network connection", flush=True)
-                    print(f"  Hint: Add DISABLED_AGENTS={agent_name} to .env to skip this agent", flush=True)
-
-                    # Cancel the task
-                    task.cancel()
-
-                    # Wait for cancellation to complete, suppressing all errors
-                    # This prevents MCP cleanup errors from propagating
-                    try:
-                        await task
-                    except (asyncio.CancelledError, Exception):
-                        pass  # Suppress all cleanup errors
-
-                    return (agent_name, None, None, [f"  ✗ {agent_name} initialization timed out"])
-            except Exception as e:
-                # Should not reach here, but handle anyway
-                print(f"✗ {agent_name}: Unexpected error - {type(e).__name__}", flush=True)
-                return (agent_name, None, None, [f"  ✗ {agent_name} failed: {e}"])
-
-        print(f"\nLoading {len(connector_files)} agents sequentially (for stability)...", flush=True)
-        print("=" * 60, flush=True)
-
-        # Load agents sequentially instead of parallel to avoid race conditions
-        # Parallel loading was causing:
-        # 1. MCP server output conflicts (multiple npx processes printing)
-        # 2. Resource contention (multiple agents trying to initialize simultaneously)
-        # 3. Inconsistent results (race conditions)
-        # Sequential loading is slower but much more reliable
-        results = []
-        for f in connector_files:
-            try:
-                result = await load_with_timeout(f)
-                results.append(result)
-            except asyncio.CancelledError:
-                # Should never reach here due to task isolation, but handle defensively
-                agent_name = f.stem.replace("_agent", "")
-                print(f"✗ {agent_name}: Cancelled (isolated)", flush=True)
-                results.append((agent_name, None, None, [f"✗ {agent_name} was cancelled"]))
-                # DO NOT re-raise - suppress to prevent propagation
-            except Exception as e:
-                agent_name = f.stem.replace("_agent", "")
-                print(f"✗ {agent_name}: Exception during load - {type(e).__name__}", flush=True)
-                results.append((agent_name, None, None, [f"✗ {agent_name} failed: {e}"]))
-
-        successful = 0
-        failed = 0
-
-        for result in results:
-            if result is None:
-                continue
-
-            if isinstance(result, BaseException):
-                failed += 1
-                # Silently count exceptions unless verbose
-                if self.verbose:
-                    print(f"Exception during loading: {result}")
-                    print(f"  Type: {type(result).__name__}")
-                continue
-
-            if not isinstance(result, tuple) or len(result) != 4:
-                failed += 1
-                # Silently count invalid results unless verbose
-                if self.verbose:
-                    print(f"Invalid result from agent loading: {result}")
-                continue
-
-            agent_name, agent_instance, capabilities, messages = result
-
-            for msg in messages:
-                if self.verbose:
-                    print(msg)
-
-            if agent_instance is not None and capabilities is not None:
-                self.sub_agents[agent_name] = agent_instance
-                self.agent_capabilities[agent_name] = capabilities
-                self.agent_health[agent_name] = {
-                    'status': 'healthy',
-                    'last_success': asyncio.get_event_loop().time(),
-                    'error_count': 0
-                }
-
-                # Log agent initialization
-                self.session_logger.log_system_event('agent_initialized', {
-                    'agent_name': agent_name,
-                    'capabilities': capabilities,
-                    'status': 'ready'
-                })
-
-                successful += 1
+        def suppress_mcp_errors(loop, context):
+            """Suppress cancel scope errors from MCP cleanup"""
+            exception = context.get('exception')
+            if exception:
+                error_str = str(exception).lower()
+                # Suppress MCP-related cleanup errors
+                if 'cancel scope' in error_str or 'different task' in error_str:
+                    # These are expected during agent timeout - silently ignore
+                    return
+            # For other exceptions, use original handler or default
+            if original_exception_handler:
+                original_exception_handler(loop, context)
             else:
-                self.agent_health[agent_name] = {
-                    'status': 'unavailable',
-                    'last_failure': asyncio.get_event_loop().time(),
-                    'error_count': 1,
-                    'error_message': 'Failed to initialize'
-                }
-                failed += 1
+                loop.default_exception_handler(context)
 
-        print("=" * 60, flush=True)
-        print(f"✓ Loaded {successful} agent(s) successfully", flush=True)
+        loop.set_exception_handler(suppress_mcp_errors)
 
-        if failed > 0:
-            print(f"✗ {failed} agent(s) failed to load", flush=True)
-            print("\nTroubleshooting tips:", flush=True)
-            print("  • Run with --verbose for detailed error messages", flush=True)
-            print("  • Check .env file for missing API keys/tokens", flush=True)
-            print("  • Verify npx is installed: npx --version", flush=True)
-            print("  • Disable problematic agents: DISABLED_AGENTS=agent1,agent2", flush=True)
+        try:
+            # Always show that we're discovering agents (helps debug startup hangs)
+            print("Discovering agents...", flush=True)
 
-        print(f"\nSystem ready with {successful} agent(s)", flush=True)
-        print("=" * 60, flush=True)
+            if self.verbose:
+                print("="*60)
+                print("Discovering Agent Connectors...")
+                print("="*60)
 
-        if self.verbose:
-            print("Verbose logging enabled - showing all initialization details")
-            print("="*60)
+            if not self.connectors_dir.exists():
+                print(f"Connectors directory '{self.connectors_dir}' not found!")
+                print("Creating directory...")
+                self.connectors_dir.mkdir(parents=True, exist_ok=True)
+                return
+
+            connector_files = list(self.connectors_dir.glob("*_agent.py"))
+
+            if not connector_files:
+                print(f"No agent connectors found in '{self.connectors_dir}'")
+                print("Expected files matching pattern: *_agent.py")
+                return
+
+            if self.verbose:
+                print(f"Loading {len(connector_files)} agent(s) in parallel...")
+
+            # Check for explicitly disabled agents via environment variable
+            # Example: DISABLED_AGENTS="slack,jira,github" to disable specific agents
+            disabled_agents_str = os.environ.get("DISABLED_AGENTS", "")
+            disabled_agents = [a.strip().lower() for a in disabled_agents_str.split(",") if a.strip()]
+
+            if disabled_agents and self.verbose:
+                print(f"Disabled agents: {', '.join(disabled_agents)}")
+
+            # Wrap each agent load with a timeout to prevent hanging
+            # Uses task-based isolation to prevent cancellation propagation
+            async def load_with_timeout(file_path):
+                agent_name = file_path.stem.replace("_agent", "")
+
+                # Skip explicitly disabled agents
+                if agent_name.lower() in disabled_agents:
+                    print(f"⊘ {agent_name}: Disabled via DISABLED_AGENTS env var", flush=True)
+                    return (agent_name, None, None, [f"  ⊘ {agent_name} disabled by user configuration"])
+
+                # Create isolated task for this agent to prevent cancellation propagation
+                task = asyncio.create_task(self._load_single_agent(file_path))
+
+                try:
+                    # Wait for task with timeout using asyncio.wait (not wait_for)
+                    # This gives us more control over cancellation
+                    done, pending = await asyncio.wait([task], timeout=10.0)
+
+                    if task in done:
+                        # Task completed - return result or handle exception
+                        try:
+                            return task.result()
+                        except Exception as e:
+                            print(f"✗ {agent_name}: Failed - {type(e).__name__}", flush=True)
+                            if self.verbose:
+                                print(f"  Details: {str(e)[:200]}", flush=True)
+                            return (agent_name, None, None, [f"  ✗ {agent_name} failed: {e}"])
+                    else:
+                        # Timeout - cancel task and handle cleanup
+                        print(f"✗ {agent_name}: Timed out after 10s", flush=True)
+                        print(f"  Hint: Agent may be waiting for credentials or network connection", flush=True)
+                        print(f"  Hint: Add DISABLED_AGENTS={agent_name} to .env to skip this agent", flush=True)
+
+                        # Cancel the task
+                        task.cancel()
+
+                        # Wait for cancellation to complete, suppressing all errors
+                        # This prevents MCP cleanup errors from propagating
+                        try:
+                            await task
+                        except (asyncio.CancelledError, Exception):
+                            pass  # Suppress all cleanup errors
+
+                        return (agent_name, None, None, [f"  ✗ {agent_name} initialization timed out"])
+                except Exception as e:
+                    # Should not reach here, but handle anyway
+                    print(f"✗ {agent_name}: Unexpected error - {type(e).__name__}", flush=True)
+                    return (agent_name, None, None, [f"  ✗ {agent_name} failed: {e}"])
+
+            print(f"\nLoading {len(connector_files)} agents sequentially (for stability)...", flush=True)
+            print("=" * 60, flush=True)
+
+            # Load agents sequentially instead of parallel to avoid race conditions
+            # Parallel loading was causing:
+            # 1. MCP server output conflicts (multiple npx processes printing)
+            # 2. Resource contention (multiple agents trying to initialize simultaneously)
+            # 3. Inconsistent results (race conditions)
+            # Sequential loading is slower but much more reliable
+            results = []
+            for f in connector_files:
+                try:
+                    result = await load_with_timeout(f)
+                    results.append(result)
+                except asyncio.CancelledError:
+                    # Should never reach here due to task isolation, but handle defensively
+                    agent_name = f.stem.replace("_agent", "")
+                    print(f"✗ {agent_name}: Cancelled (isolated)", flush=True)
+                    results.append((agent_name, None, None, [f"✗ {agent_name} was cancelled"]))
+                    # DO NOT re-raise - suppress to prevent propagation
+                except Exception as e:
+                    agent_name = f.stem.replace("_agent", "")
+                    print(f"✗ {agent_name}: Exception during load - {type(e).__name__}", flush=True)
+                    results.append((agent_name, None, None, [f"✗ {agent_name} failed: {e}"]))
+
+            successful = 0
+            failed = 0
+
+            for result in results:
+                if result is None:
+                    continue
+
+                if isinstance(result, BaseException):
+                    failed += 1
+                    # Silently count exceptions unless verbose
+                    if self.verbose:
+                        print(f"Exception during loading: {result}")
+                        print(f"  Type: {type(result).__name__}")
+                    continue
+
+                if not isinstance(result, tuple) or len(result) != 4:
+                    failed += 1
+                    # Silently count invalid results unless verbose
+                    if self.verbose:
+                        print(f"Invalid result from agent loading: {result}")
+                    continue
+
+                agent_name, agent_instance, capabilities, messages = result
+
+                for msg in messages:
+                    if self.verbose:
+                        print(msg)
+
+                if agent_instance is not None and capabilities is not None:
+                    self.sub_agents[agent_name] = agent_instance
+                    self.agent_capabilities[agent_name] = capabilities
+                    self.agent_health[agent_name] = {
+                        'status': 'healthy',
+                        'last_success': asyncio.get_event_loop().time(),
+                        'error_count': 0
+                    }
+
+                    # Log agent initialization
+                    self.session_logger.log_system_event('agent_initialized', {
+                        'agent_name': agent_name,
+                        'capabilities': capabilities,
+                        'status': 'ready'
+                    })
+
+                    successful += 1
+                else:
+                    self.agent_health[agent_name] = {
+                        'status': 'unavailable',
+                        'last_failure': asyncio.get_event_loop().time(),
+                        'error_count': 1,
+                        'error_message': 'Failed to initialize'
+                    }
+                    failed += 1
+
+            print("=" * 60, flush=True)
+            print(f"✓ Loaded {successful} agent(s) successfully", flush=True)
+
+            if failed > 0:
+                print(f"✗ {failed} agent(s) failed to load", flush=True)
+                print("\nTroubleshooting tips:", flush=True)
+                print("  • Run with --verbose for detailed error messages", flush=True)
+                print("  • Check .env file for missing API keys/tokens", flush=True)
+                print("  • Verify npx is installed: npx --version", flush=True)
+                print("  • Disable problematic agents: DISABLED_AGENTS=agent1,agent2", flush=True)
+
+            print(f"\nSystem ready with {successful} agent(s)", flush=True)
+            print("=" * 60, flush=True)
+
+            if self.verbose:
+                print("Verbose logging enabled - showing all initialization details")
+                print("="*60)
+        finally:
+            # Restore the original exception handler
+            loop.set_exception_handler(original_exception_handler)
 
     def _create_agent_tools(self) -> List[protos.FunctionDeclaration]:
         tools = []
