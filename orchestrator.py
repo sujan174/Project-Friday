@@ -524,233 +524,33 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
             return (agent_name, None, None, messages)
 
     async def discover_and_load_agents(self):
-        # Suppress asyncio warnings about unhandled exceptions in cancelled tasks
-        # This happens with MCP stdio cleanup when tasks are cancelled
-        import sys
-        import logging
-        import warnings
+        print("Discovering agents...")
 
-        # Suppress async generator warnings
-        warnings.filterwarnings('ignore', category=RuntimeWarning,
-                              message='.*coroutine.*was never awaited')
+        if self.verbose:
+            print("="*60)
+            print("Discovering Agent Connectors...")
+            print("="*60)
 
-        # Set up exception handler to suppress MCP cleanup errors
-        loop = asyncio.get_event_loop()
-        original_exception_handler = loop.get_exception_handler()
+        if not self.connectors_dir.exists():
+            print(f"Connectors directory '{self.connectors_dir}' not found!")
+            return
 
-        def suppress_mcp_errors(loop, context):
-            """Suppress cancel scope and MCP cleanup errors"""
-            exception = context.get('exception')
-            message = context.get('message', '')
+        connector_files = list(self.connectors_dir.glob("*_agent.py"))
 
-            # Check both exception and message for MCP-related errors
-            if exception:
-                error_str = str(exception).lower()
-                error_type = type(exception).__name__.lower()
+        if not connector_files:
+            print(f"No agent connectors found in '{self.connectors_dir}'")
+            return
 
-                # Suppress all MCP-related cleanup errors
-                if any(keyword in error_str for keyword in [
-                    'cancel scope', 'different task', 'already running',
-                    'async_generator', 'athrow', 'aclose', 'generator exit',
-                    'wouldblock', 'stdio_client', 'quiet_stdio_client'
-                ]):
-                    return  # Silently suppress
-
-                # Suppress by exception type
-                if any(keyword in error_type for keyword in [
-                    'runtimeerror', 'generatorexit', 'cancelledError'
-                ]):
-                    if 'mcp' in error_str or 'stdio' in error_str or 'anyio' in error_str:
-                        return  # Silently suppress
-
-            # Check message for async generator errors
-            if 'async' in message.lower() and 'generator' in message.lower():
-                return  # Silently suppress
-
-            # For other exceptions, use original handler or default
-            if original_exception_handler:
-                original_exception_handler(loop, context)
-            else:
-                loop.default_exception_handler(context)
-
-        loop.set_exception_handler(suppress_mcp_errors)
-
-        # Redirect stderr temporarily to suppress MCP cleanup error messages
-        # These are printed before asyncio exception handler sees them
-        import io
-        original_stderr = sys.stderr
-        stderr_buffer = io.StringIO()
-
-        def filtered_write(text):
-            """Filter out MCP cleanup error messages"""
-            text_lower = text.lower()
-            # Suppress known MCP cleanup error patterns
-            if any(pattern in text_lower for pattern in [
-                'an error occurred during closing of asynchronous generator',
-                'exception group traceback',
-                'cancel scope', 'different task',
-                'athrow(): asynchronous generator is already running',
-                'aclose(): asynchronous generator is already running',
-                'runtimeerror: attempted to exit cancel scope'
-            ]):
-                return  # Suppress this line
-            # Write other errors to original stderr
-            original_stderr.write(text)
-
-        # Create a wrapper for stderr
-        class FilteredStderr:
-            def write(self, text):
-                filtered_write(text)
-
-            def flush(self):
-                original_stderr.flush()
-
-        sys.stderr = FilteredStderr()
-
-        try:
-            # Always show that we're discovering agents (helps debug startup hangs)
-            print("Discovering agents...", flush=True)
-
-            if self.verbose:
-                print("="*60)
-                print("Discovering Agent Connectors...")
-                print("="*60)
-
-            if not self.connectors_dir.exists():
-                print(f"Connectors directory '{self.connectors_dir}' not found!")
-                print("Creating directory...")
-                self.connectors_dir.mkdir(parents=True, exist_ok=True)
-                return
-
-            connector_files = list(self.connectors_dir.glob("*_agent.py"))
-
-            if not connector_files:
-                print(f"No agent connectors found in '{self.connectors_dir}'")
-                print("Expected files matching pattern: *_agent.py")
-                return
-
-            if self.verbose:
-                print(f"Loading {len(connector_files)} agent(s) in parallel...")
-
-            # Check for explicitly disabled agents via environment variable
-            # Example: DISABLED_AGENTS="slack,jira,github" to disable specific agents
-            disabled_agents_str = os.environ.get("DISABLED_AGENTS", "")
-            disabled_agents = [a.strip().lower() for a in disabled_agents_str.split(",") if a.strip()]
-
-            if disabled_agents and self.verbose:
-                print(f"Disabled agents: {', '.join(disabled_agents)}")
-
-            # Wrap each agent load with a timeout to prevent hanging
-            # Uses task-based isolation to prevent cancellation propagation
-            async def load_with_timeout(file_path):
-                agent_name = file_path.stem.replace("_agent", "")
-                start_time = time.time()
-
-                # Skip explicitly disabled agents
-                if agent_name.lower() in disabled_agents:
-                    print(f"⊘ {agent_name}: Disabled via DISABLED_AGENTS env var", flush=True)
-                    return (agent_name, None, None, [f"  ⊘ {agent_name} disabled by user configuration"])
-
-                print(f"⏳ {agent_name}: Starting...", flush=True)
-
-                # Create isolated task for this agent to prevent cancellation propagation
-                task = asyncio.create_task(self._load_single_agent(file_path))
-
-                try:
-                    # Wait for task with timeout using asyncio.wait (not wait_for)
-                    # This gives us more control over cancellation
-                    # Reduced to 5s for faster failure detection
-                    done, pending = await asyncio.wait([task], timeout=5.0)
-
-                    if task in done:
-                        # Task completed - return result or handle exception
-                        try:
-                            result = task.result()
-                            elapsed = time.time() - start_time
-                            # Check if agent loaded successfully
-                            if result and len(result) >= 2 and result[1] is not None:
-                                print(f"✓ {agent_name}: Loaded successfully ({elapsed:.1f}s)", flush=True)
-                            else:
-                                print(f"✗ {agent_name}: Failed to load ({elapsed:.1f}s)", flush=True)
-                            return result
-                        except Exception as e:
-                            elapsed = time.time() - start_time
-                            print(f"✗ {agent_name}: Failed - {type(e).__name__} ({elapsed:.1f}s)", flush=True)
-                            if self.verbose:
-                                print(f"  Details: {str(e)[:200]}", flush=True)
-                            return (agent_name, None, None, [f"  ✗ {agent_name} failed: {e}"])
-                    else:
-                        # Timeout - cancel task and handle cleanup
-                        print(f"✗ {agent_name}: Timed out after 5s", flush=True)
-                        print(f"  Hint: Agent may be waiting for credentials or network connection", flush=True)
-                        print(f"  Hint: Add DISABLED_AGENTS={agent_name} to .env to skip this agent", flush=True)
-
-                        # Cancel the task
-                        task.cancel()
-
-                        # Wait for cancellation to complete, suppressing all errors
-                        # This prevents MCP cleanup errors from propagating
-                        try:
-                            await task
-                        except (asyncio.CancelledError, Exception):
-                            pass  # Suppress all cleanup errors
-
-                        return (agent_name, None, None, [f"  ✗ {agent_name} initialization timed out"])
-                except Exception as e:
-                    # Should not reach here, but handle anyway
-                    elapsed = time.time() - start_time
-                    print(f"✗ {agent_name}: Unexpected error - {type(e).__name__} ({elapsed:.1f}s)", flush=True)
-                    return (agent_name, None, None, [f"  ✗ {agent_name} failed: {e}"])
-
-            print(f"\nLoading {len(connector_files)} agents sequentially...", flush=True)
-            print("=" * 60, flush=True)
-
-            # Print which agents are being loaded
-            agent_names = [f.stem.replace("_agent", "") for f in connector_files]
-            print(f"Agents to load: {', '.join(agent_names)}", flush=True)
-            print(flush=True)
-
-            # Load agents sequentially (one at a time)
-            # This is more reliable than parallel loading and prevents MCP server conflicts
-            results = []
-            for f in connector_files:
-                try:
-                    result = await load_with_timeout(f)
-                    results.append(result)
-                except Exception as e:
-                    agent_name = f.stem.replace("_agent", "")
-                    print(f"✗ {agent_name}: Unexpected exception - {type(e).__name__}", flush=True)
-                    results.append((agent_name, None, None, [f"✗ {agent_name} failed: {e}"]))
-
-            successful = 0
-            failed = 0
-
-            for result in results:
-                if result is None:
-                    continue
-
-                if isinstance(result, BaseException):
-                    failed += 1
-                    # Silently count exceptions unless verbose
-                    if self.verbose:
-                        print(f"Exception during loading: {result}")
-                        print(f"  Type: {type(result).__name__}")
-                    continue
-
-                if not isinstance(result, tuple) or len(result) != 4:
-                    failed += 1
-                    # Silently count invalid results unless verbose
-                    if self.verbose:
-                        print(f"Invalid result from agent loading: {result}")
-                    continue
-
-                agent_name, agent_instance, capabilities, messages = result
+        # Load agents sequentially
+        for file_path in connector_files:
+            try:
+                agent_name, agent_instance, capabilities, messages = await self._load_single_agent(file_path)
 
                 for msg in messages:
                     if self.verbose:
                         print(msg)
 
-                if agent_instance is not None and capabilities is not None:
+                if agent_instance and capabilities:
                     self.sub_agents[agent_name] = agent_instance
                     self.agent_capabilities[agent_name] = capabilities
                     self.agent_health[agent_name] = {
@@ -765,8 +565,6 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
                         'capabilities': capabilities,
                         'status': 'ready'
                     })
-
-                    successful += 1
                 else:
                     self.agent_health[agent_name] = {
                         'status': 'unavailable',
@@ -774,31 +572,20 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
                         'error_count': 1,
                         'error_message': 'Failed to initialize'
                     }
-                    failed += 1
 
-            print("=" * 60, flush=True)
-            print(f"✓ Loaded {successful} agent(s) successfully", flush=True)
+            except Exception as e:
+                agent_name = file_path.stem.replace("_agent", "")
+                print(f"Failed to load {agent_name}: {e}")
+                if self.verbose:
+                    traceback.print_exc()
 
-            if failed > 0:
-                print(f"✗ {failed} agent(s) failed to load", flush=True)
-                print("\nTroubleshooting tips:", flush=True)
-                print("  • Run with --verbose for detailed error messages", flush=True)
-                print("  • Check .env file for missing API keys/tokens", flush=True)
-                print("  • Verify npx is installed: npx --version", flush=True)
-                print("  • Disable problematic agents: DISABLED_AGENTS=agent1,agent2", flush=True)
+        successful = len(self.sub_agents)
+        print(f"\n✓ {successful} agents initialized")
 
-            print(f"\nSystem ready with {successful} agent(s)", flush=True)
-            print("=" * 60, flush=True)
-
-            if self.verbose:
-                print("Verbose logging enabled - showing all initialization details")
-                print("="*60)
-        finally:
-            # Restore stderr
-            sys.stderr = original_stderr
-
-            # Restore the original exception handler
-            loop.set_exception_handler(original_exception_handler)
+        if self.agent_health:
+            unavailable = sum(1 for h in self.agent_health.values() if h['status'] == 'unavailable')
+            if unavailable > 0:
+                print(f"⚠ {unavailable} agent(s) unavailable")
 
     def _create_agent_tools(self) -> List[protos.FunctionDeclaration]:
         tools = []
