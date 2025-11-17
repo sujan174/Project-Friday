@@ -387,25 +387,30 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
             return None
 
         # Always show which agent is being loaded (for debugging hangs)
-        print(f"Loading {agent_name} agent...", flush=True)
+        print(f"[1/4] Loading {agent_name} agent module...", flush=True)
 
         if self.verbose:
             messages.append(f"Loading: {agent_name} agent...")
 
         try:
+            # Step 1: Load module
             spec = importlib.util.spec_from_file_location(
                 f"connectors.{agent_name}_agent",
                 connector_file
             )
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
+            print(f"[2/4] {agent_name}: Module loaded", flush=True)
 
             if not hasattr(module, 'Agent'):
                 messages.append(f"  ✗ No 'Agent' class found in {connector_file}")
+                print(f"✗ {agent_name}: No Agent class found", flush=True)
                 return None
 
             agent_class = module.Agent
 
+            # Step 2: Instantiate agent
+            print(f"[3/4] {agent_name}: Creating instance...", flush=True)
             try:
                 agent_instance = agent_class(
                     verbose=False,  # Always suppress agent verbosity during init
@@ -436,19 +441,25 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
                 if self.verbose:
                     messages.append(f"  ✓ Injected API cache into {agent_name}")
 
+            # Step 3: Initialize agent (this is where MCP agents might hang)
+            print(f"[4/4] {agent_name}: Initializing (connecting to services)...", flush=True)
+
             # Suppress all output during agent initialization
             import io
             import contextlib
+            import time
 
             # Create a context manager to suppress stdout and stderr
             try:
+                start_time = time.time()
                 with contextlib.redirect_stdout(io.StringIO()), \
                      contextlib.redirect_stderr(io.StringIO()):
                     await agent_instance.initialize()
                     capabilities = await agent_instance.get_capabilities()
+                init_time = time.time() - start_time
 
                 # Always show completion (helps debug what loaded vs what hung)
-                print(f"✓ {agent_name} agent loaded", flush=True)
+                print(f"✓ {agent_name} agent loaded ({init_time:.1f}s)", flush=True)
 
                 if self.verbose:
                     messages.append(f"  ✓ Loaded {agent_name} with {len(capabilities)} capabilities")
@@ -466,17 +477,23 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
                 # Detect common initialization errors
                 if "environment variable" in error_str or "must be set" in error_str:
                     # Missing credentials - show clear message
-                    print(f"⚠ {agent_name} agent: Missing required environment variables", flush=True)
+                    print(f"✗ {agent_name}: Missing required environment variables", flush=True)
+                    print(f"  Hint: Check .env file for required keys", flush=True)
                     if self.verbose:
                         print(f"  Details: {init_error}", flush=True)
                 elif "npx" in error_str or "command not found" in error_str:
-                    print(f"⚠ {agent_name} agent: npx/npm not installed", flush=True)
+                    print(f"✗ {agent_name}: npx/npm not installed", flush=True)
+                    print(f"  Hint: Install Node.js from https://nodejs.org/", flush=True)
                 elif "connection" in error_str or "network" in error_str:
-                    print(f"⚠ {agent_name} agent: Network/connection error", flush=True)
+                    print(f"✗ {agent_name}: Network/connection error", flush=True)
+                    print(f"  Hint: Check internet connection and firewall", flush=True)
                 else:
-                    # Generic error - show in verbose mode only
+                    # Generic error - always show error type for debugging
+                    print(f"✗ {agent_name}: Initialization failed - {type(init_error).__name__}", flush=True)
                     if self.verbose:
-                        print(f"⚠ {agent_name} agent initialization failed: {str(init_error)[:100]}", flush=True)
+                        print(f"  Details: {str(init_error)[:200]}", flush=True)
+                    else:
+                        print(f"  Run with --verbose for details", flush=True)
 
                 messages.append(f"  ✗ Failed to initialize {agent_name}: {init_error}")
 
@@ -532,32 +549,41 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
 
             # Skip explicitly disabled agents
             if agent_name.lower() in disabled_agents:
-                if self.verbose:
-                    print(f"⊘ {agent_name} agent disabled (via DISABLED_AGENTS env var), skipping...", flush=True)
+                print(f"⊘ {agent_name}: Disabled via DISABLED_AGENTS env var", flush=True)
                 return (agent_name, None, None, [f"  ⊘ {agent_name} disabled by user configuration"])
 
             try:
                 return await asyncio.wait_for(
                     self._load_single_agent(file_path),
-                    timeout=5.0  # 5 second timeout per agent (reduced for faster startup)
+                    timeout=10.0  # 10 second timeout per agent (increased for slower MCP servers)
                 )
             except asyncio.TimeoutError:
-                print(f"⚠ {agent_name} agent timed out after 5s, skipping...", flush=True)
+                print(f"✗ {agent_name}: Timed out after 10s", flush=True)
+                print(f"  Hint: Agent may be waiting for credentials or network connection", flush=True)
+                print(f"  Hint: Check .env file or use DISABLED_AGENTS={agent_name} to skip", flush=True)
                 return (agent_name, None, None, [f"  ✗ {agent_name} initialization timed out"])
             except Exception as e:
-                print(f"⚠ {agent_name} agent failed: {str(e)[:100]}, skipping...", flush=True)
+                print(f"✗ {agent_name}: Unexpected error - {type(e).__name__}", flush=True)
+                if self.verbose:
+                    print(f"  Details: {str(e)[:200]}", flush=True)
                 return (agent_name, None, None, [f"  ✗ {agent_name} failed: {e}"])
 
         load_tasks = [load_with_timeout(f) for f in connector_files]
 
-        # Add global timeout for all agents (30 seconds total)
+        print(f"\nAttempting to load {len(connector_files)} agents (max 60s total)...", flush=True)
+        print("=" * 60, flush=True)
+
+        # Add global timeout for all agents (60 seconds total)
         try:
             results = await asyncio.wait_for(
                 asyncio.gather(*load_tasks, return_exceptions=True),
-                timeout=30.0
+                timeout=60.0
             )
         except asyncio.TimeoutError:
-            print("⚠ Agent loading timed out after 30s, continuing with loaded agents...", flush=True)
+            print("=" * 60, flush=True)
+            print("✗ Global timeout reached (60s), stopping agent loading", flush=True)
+            print("  Some agents may still be initializing in background", flush=True)
+            print("  Hint: Disable slow agents with DISABLED_AGENTS env var", flush=True)
             # Return empty results, will be handled below
             results = []
 
@@ -615,14 +641,22 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
                 }
                 failed += 1
 
-        print(f"✓ Loaded {successful} agent(s) successfully.", flush=True)
+        print("=" * 60, flush=True)
+        print(f"✓ Loaded {successful} agent(s) successfully", flush=True)
+
         if failed > 0:
-            print(f"⚠ {failed} agent(s) failed to load but system will continue.", flush=True)
-            if not self.verbose:
-                print("Tip: Run with --verbose to see detailed error messages", flush=True)
-                print("Tip: Check .env file for missing API keys/tokens", flush=True)
+            print(f"✗ {failed} agent(s) failed to load", flush=True)
+            print("\nTroubleshooting tips:", flush=True)
+            print("  • Run with --verbose for detailed error messages", flush=True)
+            print("  • Check .env file for missing API keys/tokens", flush=True)
+            print("  • Verify npx is installed: npx --version", flush=True)
+            print("  • Disable problematic agents: DISABLED_AGENTS=agent1,agent2", flush=True)
+
+        print(f"\nSystem ready with {successful} agent(s)", flush=True)
+        print("=" * 60, flush=True)
 
         if self.verbose:
+            print("Verbose logging enabled - showing all initialization details")
             print("="*60)
 
     def _create_agent_tools(self) -> List[protos.FunctionDeclaration]:
