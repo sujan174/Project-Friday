@@ -382,6 +382,41 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
             "array": protos.Type.ARRAY,
         }
 
+    async def _cleanup_background_tasks(self, max_attempts: int = 15):
+        """
+        Wait for all lingering MCP background tasks to finish.
+
+        When MCP agents (especially Notion) fail to initialize or timeout,
+        they leave background cleanup tasks running that can raise CancelledError.
+
+        This method repeatedly tries to sleep, catching CancelledError each time,
+        until all background tasks have finished or max_attempts is reached.
+
+        This prevents background task errors from propagating to the main event loop.
+        """
+        cancelled_count = 0
+
+        for attempt in range(max_attempts):
+            try:
+                # Try to sleep - if we succeed, all background tasks are done
+                await asyncio.sleep(0.1)
+                # Success! No CancelledError means background tasks are finished
+                if self.verbose and cancelled_count > 0:
+                    print(f"[ORCHESTRATOR] Absorbed {cancelled_count} CancelledErrors from background tasks")
+                return
+            except asyncio.CancelledError:
+                # Background task still running and cancelling operations
+                cancelled_count += 1
+                if self.verbose and attempt % 5 == 0:
+                    print(f"[ORCHESTRATOR] Waiting for background tasks to finish (attempt {attempt + 1}/{max_attempts})...")
+                # Continue to next attempt
+                continue
+
+        # If we get here, we hit max_attempts but tasks are still cancelling
+        # Log a warning but don't crash - just return
+        if cancelled_count > 0:
+            print(f"⚠ Background tasks still active after {max_attempts} attempts (absorbed {cancelled_count} cancellations)")
+
     async def _spinner(self, task: asyncio.Task, message: str):
         """Simple wrapper for tasks - just awaits the task"""
         if self.verbose:
@@ -628,6 +663,12 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
             unavailable = sum(1 for h in self.agent_health.values() if h['status'] == 'unavailable')
             if unavailable > 0:
                 print(f"⚠ {unavailable} agent(s) unavailable")
+
+        # CRITICAL: Wait for all MCP background tasks to finish
+        # Some agents (especially Notion) leave background cleanup tasks running
+        # These tasks can raise CancelledError and affect the main event loop
+        # We need to absorb all CancelledErrors before returning to caller
+        await self._cleanup_background_tasks()
 
     def _create_agent_tools(self) -> List[protos.FunctionDeclaration]:
         tools = []
