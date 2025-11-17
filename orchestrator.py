@@ -384,10 +384,11 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
 
     async def _cleanup_background_tasks(self):
         """
-        Forcefully cancel all pending background tasks from failed MCP agents.
+        Cancel all pending background tasks from failed MCP agents.
 
-        When MCP agents fail, they leave immortal background tasks that keep
-        raising CancelledError. We need to find and kill these tasks.
+        When MCP agents fail, they leave background tasks that keep
+        raising CancelledError. Just cancel them and let the event loop
+        clean them up - don't wait for them.
         """
         import time
 
@@ -404,18 +405,12 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
                 if not task.done():
                     task.cancel()
 
-            # Give them time to respond to cancellation (synchronous to avoid being cancelled ourselves)
-            time.sleep(0.5)
-
-            # Gather all cancelled tasks (this will raise their CancelledErrors and clean them up)
-            try:
-                await asyncio.gather(*all_tasks, return_exceptions=True)
-            except Exception:
-                # Ignore all errors - we just want tasks to finish
-                pass
+            # Give them a moment to process cancellation (synchronous)
+            # Don't wait for them - event loop will clean up eventually
+            time.sleep(1.0)
 
             if self.verbose:
-                print(f"[ORCHESTRATOR] Background tasks cleaned up")
+                print(f"[ORCHESTRATOR] Background tasks cancelled")
 
     async def _spinner(self, task: asyncio.Task, message: str):
         """Simple wrapper for tasks - just awaits the task"""
