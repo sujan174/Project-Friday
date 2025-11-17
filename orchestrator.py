@@ -602,7 +602,8 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
                 try:
                     # Wait for task with timeout using asyncio.wait (not wait_for)
                     # This gives us more control over cancellation
-                    done, pending = await asyncio.wait([task], timeout=10.0)
+                    # Reduced to 5s for faster failure detection
+                    done, pending = await asyncio.wait([task], timeout=5.0)
 
                     if task in done:
                         # Task completed - return result or handle exception
@@ -623,7 +624,7 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
                             return (agent_name, None, None, [f"  ✗ {agent_name} failed: {e}"])
                     else:
                         # Timeout - cancel task and handle cleanup
-                        print(f"✗ {agent_name}: Timed out after 10s", flush=True)
+                        print(f"✗ {agent_name}: Timed out after 5s", flush=True)
                         print(f"  Hint: Agent may be waiting for credentials or network connection", flush=True)
                         print(f"  Hint: Add DISABLED_AGENTS={agent_name} to .env to skip this agent", flush=True)
 
@@ -657,14 +658,22 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
             tasks = [load_with_timeout(f) for f in connector_files]
 
             # Wait for all tasks to complete with an overall timeout
-            # Each agent has its own 10s timeout, but add 30s overall timeout as safety
+            # Each agent has its own 5s timeout, add 15s overall timeout as safety
+            # This ensures we don't hang forever if something goes wrong
+            start_load_time = time.time()
             try:
                 results = await asyncio.wait_for(
                     asyncio.gather(*tasks, return_exceptions=True),
-                    timeout=30.0
+                    timeout=15.0
                 )
             except asyncio.TimeoutError:
-                print("⚠️  Overall timeout reached (30s) - some agents may not have loaded", flush=True)
+                elapsed = time.time() - start_load_time
+                print(f"⚠️  Overall timeout reached ({elapsed:.1f}s) - cancelling remaining agents", flush=True)
+                print("⚠️  Some agents are hanging. Consider disabling them with DISABLED_AGENTS env var", flush=True)
+                # Cancel all tasks that are still pending
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
                 # Create dummy results for agents that didn't complete
                 results = [(name, None, None, [f"✗ {name} timed out"]) for name in agent_names]
 
