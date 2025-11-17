@@ -476,27 +476,39 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
             except Exception as init_error:
                 # Show helpful error messages for common issues
                 error_str = str(init_error).lower()
+                error_type = type(init_error).__name__
 
-                # Detect common initialization errors
-                if "environment variable" in error_str or "must be set" in error_str:
+                # Detect common initialization errors (check most specific first)
+                if "environment variable" in error_str or "must be set" in error_str or isinstance(init_error, ValueError):
                     # Missing credentials - show clear message
                     print(f"✗ {agent_name}: Missing required environment variables", flush=True)
-                    print(f"  Hint: Check .env file for required keys", flush=True)
+                    print(f"  Hint: Add required credentials to .env file", flush=True)
                     if self.verbose:
                         print(f"  Details: {init_error}", flush=True)
-                elif "npx" in error_str or "command not found" in error_str:
+                    else:
+                        # Show first line of error for context
+                        first_line = str(init_error).split('\n')[0]
+                        print(f"  Error: {first_line[:100]}", flush=True)
+                elif "no such file" in error_str and "npx" in error_str:
+                    # Actually missing npx (file not found)
                     print(f"✗ {agent_name}: npx/npm not installed", flush=True)
                     print(f"  Hint: Install Node.js from https://nodejs.org/", flush=True)
-                elif "connection" in error_str or "network" in error_str:
+                elif "connection" in error_str or "network" in error_str or "timeout" in error_str:
                     print(f"✗ {agent_name}: Network/connection error", flush=True)
                     print(f"  Hint: Check internet connection and firewall", flush=True)
+                elif "permission" in error_str or "access denied" in error_str:
+                    print(f"✗ {agent_name}: Permission denied", flush=True)
+                    print(f"  Hint: Check API token permissions", flush=True)
                 else:
-                    # Generic error - always show error type for debugging
-                    print(f"✗ {agent_name}: Initialization failed - {type(init_error).__name__}", flush=True)
+                    # Generic error - show actual error type for debugging
+                    print(f"✗ {agent_name}: {error_type}", flush=True)
+                    # Always show first line of error, even without verbose
+                    first_line = str(init_error).split('\n')[0]
+                    print(f"  Error: {first_line[:150]}", flush=True)
                     if self.verbose:
-                        print(f"  Details: {str(init_error)[:200]}", flush=True)
+                        print(f"  Full details: {str(init_error)[:500]}", flush=True)
                     else:
-                        print(f"  Run with --verbose for details", flush=True)
+                        print(f"  Run with --verbose for full details", flush=True)
 
                 messages.append(f"  ✗ Failed to initialize {agent_name}: {init_error}")
 
