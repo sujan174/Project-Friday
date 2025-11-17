@@ -587,11 +587,14 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
             # Uses task-based isolation to prevent cancellation propagation
             async def load_with_timeout(file_path):
                 agent_name = file_path.stem.replace("_agent", "")
+                start_time = time.time()
 
                 # Skip explicitly disabled agents
                 if agent_name.lower() in disabled_agents:
                     print(f"⊘ {agent_name}: Disabled via DISABLED_AGENTS env var", flush=True)
                     return (agent_name, None, None, [f"  ⊘ {agent_name} disabled by user configuration"])
+
+                print(f"⏳ {agent_name}: Starting...", flush=True)
 
                 # Create isolated task for this agent to prevent cancellation propagation
                 task = asyncio.create_task(self._load_single_agent(file_path))
@@ -604,9 +607,17 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
                     if task in done:
                         # Task completed - return result or handle exception
                         try:
-                            return task.result()
+                            result = task.result()
+                            elapsed = time.time() - start_time
+                            # Check if agent loaded successfully
+                            if result and len(result) >= 2 and result[1] is not None:
+                                print(f"✓ {agent_name}: Loaded successfully ({elapsed:.1f}s)", flush=True)
+                            else:
+                                print(f"✗ {agent_name}: Failed to load ({elapsed:.1f}s)", flush=True)
+                            return result
                         except Exception as e:
-                            print(f"✗ {agent_name}: Failed - {type(e).__name__}", flush=True)
+                            elapsed = time.time() - start_time
+                            print(f"✗ {agent_name}: Failed - {type(e).__name__} ({elapsed:.1f}s)", flush=True)
                             if self.verbose:
                                 print(f"  Details: {str(e)[:200]}", flush=True)
                             return (agent_name, None, None, [f"  ✗ {agent_name} failed: {e}"])
@@ -629,18 +640,33 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
                         return (agent_name, None, None, [f"  ✗ {agent_name} initialization timed out"])
                 except Exception as e:
                     # Should not reach here, but handle anyway
-                    print(f"✗ {agent_name}: Unexpected error - {type(e).__name__}", flush=True)
+                    elapsed = time.time() - start_time
+                    print(f"✗ {agent_name}: Unexpected error - {type(e).__name__} ({elapsed:.1f}s)", flush=True)
                     return (agent_name, None, None, [f"  ✗ {agent_name} failed: {e}"])
 
             print(f"\nLoading {len(connector_files)} agents in parallel...", flush=True)
             print("=" * 60, flush=True)
 
+            # Print which agents are being loaded
+            agent_names = [f.stem.replace("_agent", "") for f in connector_files]
+            print(f"Agents to load: {', '.join(agent_names)}", flush=True)
+            print(flush=True)
+
             # Load all agents in parallel for speed
             # Create all tasks at once
             tasks = [load_with_timeout(f) for f in connector_files]
 
-            # Wait for all tasks to complete, capturing exceptions
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+            # Wait for all tasks to complete with an overall timeout
+            # Each agent has its own 10s timeout, but add 30s overall timeout as safety
+            try:
+                results = await asyncio.wait_for(
+                    asyncio.gather(*tasks, return_exceptions=True),
+                    timeout=30.0
+                )
+            except asyncio.TimeoutError:
+                print("⚠️  Overall timeout reached (30s) - some agents may not have loaded", flush=True)
+                # Create dummy results for agents that didn't complete
+                results = [(name, None, None, [f"✗ {name} timed out"]) for name in agent_names]
 
             # Process results - handle any exceptions that were returned
             processed_results = []
