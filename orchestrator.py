@@ -452,10 +452,13 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
             # Create a context manager to suppress stdout and stderr
             try:
                 start_time = time.time()
-                with contextlib.redirect_stdout(io.StringIO()), \
-                     contextlib.redirect_stderr(io.StringIO()):
-                    await agent_instance.initialize()
-                    capabilities = await agent_instance.get_capabilities()
+
+                # TEMPORARY: Don't suppress output for debugging hanging issues
+                # TODO: Re-enable suppression once agents load successfully
+                print(f"      → {agent_name}: Calling initialize()...", flush=True)
+                await agent_instance.initialize()
+                print(f"      → {agent_name}: Getting capabilities...", flush=True)
+                capabilities = await agent_instance.get_capabilities()
                 init_time = time.time() - start_time
 
                 # Always show completion (helps debug what loaded vs what hung)
