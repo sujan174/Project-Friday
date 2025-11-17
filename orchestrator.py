@@ -568,16 +568,21 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
                 print(f"⊘ {agent_name}: Disabled via DISABLED_AGENTS env var", flush=True)
                 return (agent_name, None, None, [f"  ⊘ {agent_name} disabled by user configuration"])
 
+            agent_instance = None
             try:
                 return await asyncio.wait_for(
                     self._load_single_agent(file_path),
-                    timeout=10.0  # 10 second timeout per agent (increased for slower MCP servers)
+                    timeout=10.0  # 10 second timeout per agent
                 )
             except asyncio.TimeoutError:
                 print(f"✗ {agent_name}: Timed out after 10s", flush=True)
                 print(f"  Hint: Agent may be waiting for credentials or network connection", flush=True)
-                print(f"  Hint: Check .env file or use DISABLED_AGENTS={agent_name} to skip", flush=True)
+                print(f"  Hint: Add DISABLED_AGENTS={agent_name} to .env to skip this agent", flush=True)
                 return (agent_name, None, None, [f"  ✗ {agent_name} initialization timed out"])
+            except asyncio.CancelledError:
+                # Handle cancellation gracefully to prevent crash
+                print(f"✗ {agent_name}: Cancelled", flush=True)
+                return (agent_name, None, None, [f"  ✗ {agent_name} was cancelled"])
             except Exception as e:
                 print(f"✗ {agent_name}: Unexpected error - {type(e).__name__}", flush=True)
                 if self.verbose:
