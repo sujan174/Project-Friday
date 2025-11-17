@@ -244,23 +244,25 @@ async def process_with_ui(
 
     try:
         # Process the message
-        # Protect against lingering background task cancellations
-        max_retries = 3
+        # Protect against lingering background task cancellations from failed agent init
+        max_retries = 5
         for attempt in range(max_retries):
             try:
                 response = await orchestrator.process_message(user_message)
                 return response
             except asyncio.CancelledError:
-                # Background task from failed agent initialization is still cancelling operations
+                # Background task (Task-22) from failed Notion agent is still alive and cancelling operations
+                # It will eventually die - just need to keep retrying
                 if attempt < max_retries - 1:
-                    # Retry - the background task will eventually die
+                    # Retry after delay - background task will die eventually
                     # Use sync sleep to avoid being cancelled
                     import time
-                    time.sleep(0.5)
+                    time.sleep(1.0)  # Increased delay to give Task-22 more time to die
                     continue
                 else:
-                    # Final attempt failed - give up gracefully
-                    return "❌ System is still stabilizing from agent initialization. Please try again in a moment."
+                    # Final attempt failed - background task is persistent
+                    # User can just type their message again
+                    return "❌ System is still stabilizing from agent initialization. Please type your message again."
 
     finally:
         # Restore original method

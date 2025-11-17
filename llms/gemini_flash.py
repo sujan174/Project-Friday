@@ -158,7 +158,7 @@ class GeminiFlash(BaseLLM):
     # Context caching (Gemini's official prompt caching)
     _context_cache: Dict[str, Any] = {}  # cache_key -> CachedContent object
     _context_cache_ttl: float = 3600.0  # 1 hour (max is 86400 = 24 hours)
-    _enable_context_caching: bool = True  # Feature flag for context caching
+    _enable_context_caching: bool = False  # Feature flag for context caching (DISABLED - prompt too small)
 
     def __init__(self, config: Optional[LLMConfig] = None, enable_caching: bool = True):
         if config is None:
