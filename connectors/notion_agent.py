@@ -695,7 +695,8 @@ Remember: You're not just executing commands—you're helping users build a powe
                     if self.verbose:
                         print(f"[NOTION AGENT] Connection failed: {e}")
                         print(f"[NOTION AGENT] Retrying in {retry_delay}s...")
-                    await asyncio.sleep(retry_delay)
+                    # Use synchronous sleep to avoid CancelledError in cancelled tasks
+                    time.sleep(retry_delay)
                     continue
                 else:
                     raise RuntimeError(
@@ -715,7 +716,8 @@ Remember: You're not just executing commands—you're helping users build a powe
                     if self.verbose:
                         print(f"[NOTION AGENT] Unexpected error: {e}")
                         print(f"[NOTION AGENT] Retrying in {retry_delay}s...")
-                    await asyncio.sleep(retry_delay)
+                    # Use synchronous sleep to avoid CancelledError in cancelled tasks
+                    time.sleep(retry_delay)
                     continue
                 else:
                     raise RuntimeError(
