@@ -244,9 +244,23 @@ async def process_with_ui(
 
     try:
         # Process the message
-        response = await orchestrator.process_message(user_message)
-
-        return response
+        # Protect against lingering background task cancellations
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = await orchestrator.process_message(user_message)
+                return response
+            except asyncio.CancelledError:
+                # Background task from failed agent initialization is still cancelling operations
+                if attempt < max_retries - 1:
+                    # Retry - the background task will eventually die
+                    # Use sync sleep to avoid being cancelled
+                    import time
+                    time.sleep(0.5)
+                    continue
+                else:
+                    # Final attempt failed - give up gracefully
+                    return "❌ System is still stabilizing from agent initialization. Please try again in a moment."
 
     finally:
         # Restore original method
