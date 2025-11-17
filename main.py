@@ -246,22 +246,39 @@ async def process_with_ui(
         # Process the message
         # Protect against lingering background task cancellations from failed agent init
         max_retries = 5
+
         for attempt in range(max_retries):
+            # Before each attempt, aggressively cancel any lingering background tasks
+            if attempt > 0:
+                import time
+                current_task = asyncio.current_task()
+                all_tasks = [t for t in asyncio.all_tasks() if t is not current_task and not t.done()]
+
+                if all_tasks:
+                    print(f"[DEBUG] Attempt {attempt + 1}/{max_retries}: Found {len(all_tasks)} background tasks still running")
+                    for task in all_tasks:
+                        task.cancel()
+                    time.sleep(0.5)
+                else:
+                    print(f"[DEBUG] Attempt {attempt + 1}/{max_retries}: No background tasks found")
+
             try:
+                print(f"[DEBUG] Attempt {attempt + 1}/{max_retries}: Processing message...")
                 response = await orchestrator.process_message(user_message)
+                print(f"[DEBUG] Attempt {attempt + 1}/{max_retries}: SUCCESS!")
                 return response
-            except asyncio.CancelledError:
+            except asyncio.CancelledError as e:
                 # Background task (Task-22) from failed Notion agent is still alive and cancelling operations
-                # It will eventually die - just need to keep retrying
+                print(f"[DEBUG] Attempt {attempt + 1}/{max_retries}: CANCELLED by background task")
+
                 if attempt < max_retries - 1:
-                    # Retry after delay - background task will die eventually
-                    # Use sync sleep to avoid being cancelled
+                    # Retry after delay
                     import time
-                    time.sleep(1.0)  # Increased delay to give Task-22 more time to die
+                    time.sleep(1.0)
                     continue
                 else:
-                    # Final attempt failed - background task is persistent
-                    # User can just type their message again
+                    # Final attempt failed - background task is immortal
+                    print(f"[DEBUG] All {max_retries} attempts failed - background task is persistent")
                     return "❌ System is still stabilizing from agent initialization. Please type your message again."
 
     finally:
