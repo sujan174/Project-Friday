@@ -453,12 +453,13 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
             try:
                 start_time = time.time()
 
-                # TEMPORARY: Don't suppress output for debugging hanging issues
-                # TODO: Re-enable suppression once agents load successfully
-                print(f"      → {agent_name}: Calling initialize()...", flush=True)
-                await agent_instance.initialize()
-                print(f"      → {agent_name}: Getting capabilities...", flush=True)
-                capabilities = await agent_instance.get_capabilities()
+                # Suppress agent initialization output for clean UI
+                # Keep progress indicators visible
+                with contextlib.redirect_stdout(io.StringIO()), \
+                     contextlib.redirect_stderr(io.StringIO()):
+                    await agent_instance.initialize()
+                    capabilities = await agent_instance.get_capabilities()
+
                 init_time = time.time() - start_time
 
                 # Always show completion (helps debug what loaded vs what hung)
@@ -938,7 +939,8 @@ Provide a concise summary that gives the user exactly what they need to know."""
             )
         except asyncio.TimeoutError:
             # Fallback to UNKNOWN intent if classification times out
-            from intelligence.base_types import Intent, IntentType
+            # IntentType is already imported at module level
+            from intelligence.base_types import Intent
             if self.verbose:
                 print(f"[INTELLIGENCE] Classification timed out, using fallback")
             hybrid_result = type('obj', (object,), {
@@ -951,7 +953,8 @@ Provide a concise summary that gives the user exactly what they need to know."""
             })()
         except Exception as e:
             # Fallback to UNKNOWN intent on any error
-            from intelligence.base_types import Intent, IntentType
+            # IntentType is already imported at module level
+            from intelligence.base_types import Intent
             if self.verbose:
                 print(f"[INTELLIGENCE] Classification failed: {str(e)[:100]}")
             hybrid_result = type('obj', (object,), {

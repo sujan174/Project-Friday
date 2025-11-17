@@ -286,7 +286,7 @@ class EnhancedUI:
             border_style=self.colors['primary'],
             box=box.ROUNDED,
             padding=(1, 2),
-            title=f"[bold {self.colors['primary']}]Aerius[/bold]",
+            title=f"[bold][{self.colors['primary']}]Aerius[/{self.colors['primary']}][/bold]",
             title_align="left",
         )
         self.console.print(panel)
