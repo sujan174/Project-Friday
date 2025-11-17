@@ -645,7 +645,7 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
                     print(f"✗ {agent_name}: Unexpected error - {type(e).__name__} ({elapsed:.1f}s)", flush=True)
                     return (agent_name, None, None, [f"  ✗ {agent_name} failed: {e}"])
 
-            print(f"\nLoading {len(connector_files)} agents in parallel...", flush=True)
+            print(f"\nLoading {len(connector_files)} agents sequentially...", flush=True)
             print("=" * 60, flush=True)
 
             # Print which agents are being loaded
@@ -653,45 +653,17 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
             print(f"Agents to load: {', '.join(agent_names)}", flush=True)
             print(flush=True)
 
-            # Load all agents in parallel for speed
-            # Create all tasks at once
-            tasks = [load_with_timeout(f) for f in connector_files]
-
-            # Wait for all tasks to complete with an overall timeout
-            # Each agent has its own 5s timeout, add 15s overall timeout as safety
-            # This ensures we don't hang forever if something goes wrong
-            start_load_time = time.time()
-            try:
-                results = await asyncio.wait_for(
-                    asyncio.gather(*tasks, return_exceptions=True),
-                    timeout=15.0
-                )
-            except asyncio.TimeoutError:
-                elapsed = time.time() - start_load_time
-                print(f"⚠️  Overall timeout reached ({elapsed:.1f}s) - cancelling remaining agents", flush=True)
-                print("⚠️  Some agents are hanging. Consider disabling them with DISABLED_AGENTS env var", flush=True)
-                # Cancel all tasks that are still pending
-                for task in tasks:
-                    if not task.done():
-                        task.cancel()
-                # Create dummy results for agents that didn't complete
-                results = [(name, None, None, [f"✗ {name} timed out"]) for name in agent_names]
-
-            # Process results - handle any exceptions that were returned
-            processed_results = []
-            for i, result in enumerate(results):
-                if isinstance(result, Exception):
-                    # Exception was raised during agent loading
-                    agent_name = connector_files[i].stem.replace("_agent", "")
-                    print(f"✗ {agent_name}: Exception during load - {type(result).__name__}", flush=True)
-                    if self.verbose:
-                        print(f"  Details: {str(result)[:200]}", flush=True)
-                    processed_results.append((agent_name, None, None, [f"✗ {agent_name} failed: {result}"]))
-                else:
-                    # Normal result
-                    processed_results.append(result)
-
-            results = processed_results
+            # Load agents sequentially (one at a time)
+            # This is more reliable than parallel loading and prevents MCP server conflicts
+            results = []
+            for f in connector_files:
+                try:
+                    result = await load_with_timeout(f)
+                    results.append(result)
+                except Exception as e:
+                    agent_name = f.stem.replace("_agent", "")
+                    print(f"✗ {agent_name}: Unexpected exception - {type(e).__name__}", flush=True)
+                    results.append((agent_name, None, None, [f"✗ {agent_name} failed: {e}"]))
 
             successful = 0
             failed = 0
