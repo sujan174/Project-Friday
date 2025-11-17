@@ -24,6 +24,7 @@ from connectors.agent_intelligence import (
     SharedContext,
     ProactiveAssistant
 )
+from core.agent_error_handling import CredentialValidator, AgentErrorHandler
 
 
 class RetryConfig:
@@ -392,26 +393,24 @@ Remember: You're not just executing commands—you're helping users manage their
             )
 
     def _get_credentials(self) -> Tuple[str, str, str]:
-        # Get Jira credentials from environment
-        jira_url = os.environ.get("JIRA_URL")
-        jira_username = os.environ.get("JIRA_USERNAME")
-        jira_api_token = os.environ.get("JIRA_API_TOKEN")
+        # Get Jira credentials from environment with validation
+        required_vars = {
+            'JIRA_URL': 'Jira URL',
+            'JIRA_USERNAME': 'Jira Username',
+            'JIRA_API_TOKEN': 'Jira API Token'
+        }
 
-        if not all([jira_url, jira_username, jira_api_token]):
+        credential_check = CredentialValidator.check_credentials('Jira', required_vars)
+
+        if not credential_check.valid:
             raise ValueError(
-                "Missing required environment variables.\n"
-                "Please set the following:\n"
-                "  JIRA_URL - Your full Jira URL (e.g., 'https://mycompany.atlassian.net')\n"
-                "  JIRA_USERNAME - Your Atlassian account email\n"
-                "  JIRA_API_TOKEN - Your Jira API token\n\n"
-                "To create an API token:\n"
-                "1. Go to https://id.atlassian.com/manage-profile/security/api-tokens\n"
-                "2. Click 'Create API token'\n"
-                "3. Give it a label and copy the token\n"
-                "4. Set it in your environment"
+                credential_check.error_message + "\n" +
+                credential_check.setup_instructions
             )
 
-        jira_url = jira_url.rstrip('/')
+        jira_url = os.environ.get("JIRA_URL").rstrip('/')
+        jira_username = os.environ.get("JIRA_USERNAME")
+        jira_api_token = os.environ.get("JIRA_API_TOKEN")
 
         return jira_url, jira_username, jira_api_token
 

@@ -35,11 +35,20 @@ from core.parallel_executor import ParallelExecutor, AgentTask
 from core.circuit_breaker import CircuitBreaker, CircuitConfig, CircuitBreakerError
 from core.advanced_cache import HybridCache, APIResponseCache
 from core.simple_embeddings import create_default_embeddings
+from core.agent_error_handling import AgentErrorHandler, FallbackBehaviors
 load_dotenv()
 
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 if not GOOGLE_API_KEY:
-    raise ValueError("Please set GOOGLE_API_KEY environment variable")
+    raise ValueError(
+        "Google Gemini API Key is required to run Project Aerius.\n\n"
+        "To set up:\n"
+        "1. Go to: https://makersuite.google.com/app/apikey\n"
+        "2. Click 'Create API Key'\n"
+        "3. Copy the API key\n"
+        "4. Add to your .env file:\n"
+        "   GOOGLE_API_KEY=your_api_key_here\n"
+    )
 
 genai.configure(api_key=GOOGLE_API_KEY)
 
@@ -475,43 +484,31 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
                 return (agent_name, agent_instance, capabilities, messages)
 
             except Exception as init_error:
-                # Show helpful error messages for common issues
-                error_str = str(init_error).lower()
-                error_type = type(init_error).__name__
+                # Use centralized error handler for user-friendly messages
+                short_msg, detailed_msg = AgentErrorHandler.handle_initialization_error(
+                    agent_name, init_error, verbose=self.verbose
+                )
 
-                # Detect common initialization errors (check most specific first)
-                if "environment variable" in error_str or "must be set" in error_str or isinstance(init_error, ValueError):
-                    # Missing credentials - show clear message
-                    print(f"✗ {agent_name}: Missing required environment variables", flush=True)
-                    print(f"  Hint: Add required credentials to .env file", flush=True)
-                    if self.verbose:
-                        print(f"  Details: {init_error}", flush=True)
-                    else:
-                        # Show first line of error for context
-                        first_line = str(init_error).split('\n')[0]
-                        print(f"  Error: {first_line[:100]}", flush=True)
-                elif "no such file" in error_str and "npx" in error_str:
-                    # Actually missing npx (file not found)
-                    print(f"✗ {agent_name}: npx/npm not installed", flush=True)
-                    print(f"  Hint: Install Node.js from https://nodejs.org/", flush=True)
-                elif "connection" in error_str or "network" in error_str or "timeout" in error_str:
-                    print(f"✗ {agent_name}: Network/connection error", flush=True)
-                    print(f"  Hint: Check internet connection and firewall", flush=True)
-                elif "permission" in error_str or "access denied" in error_str:
-                    print(f"✗ {agent_name}: Permission denied", flush=True)
-                    print(f"  Hint: Check API token permissions", flush=True)
+                print(f"✗ {agent_name}: {short_msg}", flush=True)
+
+                # Show detailed guidance based on verbosity
+                if self.verbose:
+                    # In verbose mode, show full detailed message with indentation
+                    for line in detailed_msg.split('\n'):
+                        if line.strip():
+                            print(f"  {line}", flush=True)
                 else:
-                    # Generic error - show actual error type for debugging
-                    print(f"✗ {agent_name}: {error_type}", flush=True)
-                    # Always show first line of error, even without verbose
-                    first_line = str(init_error).split('\n')[0]
-                    print(f"  Error: {first_line[:150]}", flush=True)
-                    if self.verbose:
-                        print(f"  Full details: {str(init_error)[:500]}", flush=True)
-                    else:
-                        print(f"  Run with --verbose for full details", flush=True)
+                    # In normal mode, show condensed helpful hints
+                    detail_lines = detailed_msg.split('\n')
+                    for i, line in enumerate(detail_lines):
+                        # Skip "Full error:" line in non-verbose mode
+                        if line.strip() and not line.startswith('Full error:'):
+                            print(f"  {line}", flush=True)
+                        # Stop after showing key info (first ~8 lines)
+                        if i >= 8:
+                            break
 
-                messages.append(f"  ✗ Failed to initialize {agent_name}: {init_error}")
+                messages.append(f"  ✗ Failed to initialize {agent_name}: {short_msg}")
 
                 try:
                     if hasattr(agent_instance, 'cleanup'):
