@@ -584,24 +584,24 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
                     print(f"  Details: {str(e)[:200]}", flush=True)
                 return (agent_name, None, None, [f"  ✗ {agent_name} failed: {e}"])
 
-        load_tasks = [load_with_timeout(f) for f in connector_files]
-
-        print(f"\nAttempting to load {len(connector_files)} agents (max 60s total)...", flush=True)
+        print(f"\nLoading {len(connector_files)} agents sequentially (for stability)...", flush=True)
         print("=" * 60, flush=True)
 
-        # Add global timeout for all agents (60 seconds total)
-        try:
-            results = await asyncio.wait_for(
-                asyncio.gather(*load_tasks, return_exceptions=True),
-                timeout=60.0
-            )
-        except asyncio.TimeoutError:
-            print("=" * 60, flush=True)
-            print("✗ Global timeout reached (60s), stopping agent loading", flush=True)
-            print("  Some agents may still be initializing in background", flush=True)
-            print("  Hint: Disable slow agents with DISABLED_AGENTS env var", flush=True)
-            # Return empty results, will be handled below
-            results = []
+        # Load agents sequentially instead of parallel to avoid race conditions
+        # Parallel loading was causing:
+        # 1. MCP server output conflicts (multiple npx processes printing)
+        # 2. Resource contention (multiple agents trying to initialize simultaneously)
+        # 3. Inconsistent results (race conditions)
+        # Sequential loading is slower but much more reliable
+        results = []
+        for f in connector_files:
+            try:
+                result = await load_with_timeout(f)
+                results.append(result)
+            except Exception as e:
+                agent_name = f.stem.replace("_agent", "")
+                print(f"✗ {agent_name}: Exception during load - {type(e).__name__}", flush=True)
+                results.append((agent_name, None, None, [f"✗ {agent_name} failed: {e}"]))
 
         successful = 0
         failed = 0
