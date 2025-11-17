@@ -9,7 +9,6 @@ main program's UI.
 import os
 from contextlib import asynccontextmanager
 from mcp.client.stdio import stdio_client, StdioServerParameters
-from dataclasses import replace
 
 
 @asynccontextmanager
@@ -40,7 +39,13 @@ async def quiet_stdio_client(server_params: StdioServerParameters):
     }
 
     # Create new server params with quiet environment
-    quiet_params = replace(server_params, env=quiet_env)
+    # Instead of using dataclasses.replace(), create a new instance
+    # This is more compatible across different MCP library versions
+    quiet_params = StdioServerParameters(
+        command=server_params.command,
+        args=server_params.args,
+        env=quiet_env
+    )
 
     # Use the original stdio_client with modified params
     async with stdio_client(quiet_params) as (read_stream, write_stream):
