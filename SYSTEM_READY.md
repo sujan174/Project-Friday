@@ -37,6 +37,17 @@ MarkupError: closing tag '[/bold]' doesn't match any open tag
 ### 3. **Output Suppression**
 **Fixed:** Re-enabled clean output suppression - no more noisy MCP server messages during loading
 
+### 4. **Agent Timeout Crash (Notion)**
+
+#### Issue: System Crash on Agent Timeout
+```
+asyncio.exceptions.CancelledError: Cancelled via cancel scope
+RuntimeError: Attempted to exit cancel scope in a different task
+[Complete system crash]
+```
+
+**Fixed:** Added graceful CancelledError handling in timeout wrapper. When an agent times out (like Notion without credentials), the system now gracefully skips it and continues loading other agents instead of crashing.
+
 ---
 
 ## 🚀 System Status
@@ -271,12 +282,13 @@ You now have a production-ready multi-agent orchestration system with:
 - Hybrid intelligence system
 
 **All previous issues have been resolved:**
-1. ✅ Agent loading logic fixed
+1. ✅ Agent loading logic fixed (sequential loading)
 2. ✅ MCP wrapper dataclass issue fixed
 3. ✅ Intelligence system scope errors fixed
 4. ✅ UI markup errors fixed
 5. ✅ Output suppression restored
 6. ✅ Comprehensive logging added
+7. ✅ Agent timeout crash fixed (CancelledError handling)
 
 **The system is ready for production use!** 🚀
 
