@@ -528,20 +528,45 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
         # This happens with MCP stdio cleanup when tasks are cancelled
         import sys
         import logging
+        import warnings
+
+        # Suppress async generator warnings
+        warnings.filterwarnings('ignore', category=RuntimeWarning,
+                              message='.*coroutine.*was never awaited')
 
         # Set up exception handler to suppress MCP cleanup errors
         loop = asyncio.get_event_loop()
         original_exception_handler = loop.get_exception_handler()
 
         def suppress_mcp_errors(loop, context):
-            """Suppress cancel scope errors from MCP cleanup"""
+            """Suppress cancel scope and MCP cleanup errors"""
             exception = context.get('exception')
+            message = context.get('message', '')
+
+            # Check both exception and message for MCP-related errors
             if exception:
                 error_str = str(exception).lower()
-                # Suppress MCP-related cleanup errors
-                if 'cancel scope' in error_str or 'different task' in error_str:
-                    # These are expected during agent timeout - silently ignore
-                    return
+                error_type = type(exception).__name__.lower()
+
+                # Suppress all MCP-related cleanup errors
+                if any(keyword in error_str for keyword in [
+                    'cancel scope', 'different task', 'already running',
+                    'async_generator', 'athrow', 'aclose', 'generator exit',
+                    'wouldblock', 'stdio_client', 'quiet_stdio_client'
+                ]):
+                    return  # Silently suppress
+
+                # Suppress by exception type
+                if any(keyword in error_type for keyword in [
+                    'runtimeerror', 'generatorexit', 'cancelledError'
+                ]):
+                    if 'mcp' in error_str or 'stdio' in error_str or 'anyio' in error_str:
+                        return  # Silently suppress
+
+            # Check message for async generator errors
+            if 'async' in message.lower() and 'generator' in message.lower():
+                return  # Silently suppress
+
             # For other exceptions, use original handler or default
             if original_exception_handler:
                 original_exception_handler(loop, context)
@@ -549,6 +574,38 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
                 loop.default_exception_handler(context)
 
         loop.set_exception_handler(suppress_mcp_errors)
+
+        # Redirect stderr temporarily to suppress MCP cleanup error messages
+        # These are printed before asyncio exception handler sees them
+        import io
+        original_stderr = sys.stderr
+        stderr_buffer = io.StringIO()
+
+        def filtered_write(text):
+            """Filter out MCP cleanup error messages"""
+            text_lower = text.lower()
+            # Suppress known MCP cleanup error patterns
+            if any(pattern in text_lower for pattern in [
+                'an error occurred during closing of asynchronous generator',
+                'exception group traceback',
+                'cancel scope', 'different task',
+                'athrow(): asynchronous generator is already running',
+                'aclose(): asynchronous generator is already running',
+                'runtimeerror: attempted to exit cancel scope'
+            ]):
+                return  # Suppress this line
+            # Write other errors to original stderr
+            original_stderr.write(text)
+
+        # Create a wrapper for stderr
+        class FilteredStderr:
+            def write(self, text):
+                filtered_write(text)
+
+            def flush(self):
+                original_stderr.flush()
+
+        sys.stderr = FilteredStderr()
 
         try:
             # Always show that we're discovering agents (helps debug startup hangs)
@@ -737,6 +794,9 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
                 print("Verbose logging enabled - showing all initialization details")
                 print("="*60)
         finally:
+            # Restore stderr
+            sys.stderr = original_stderr
+
             # Restore the original exception handler
             loop.set_exception_handler(original_exception_handler)
 
