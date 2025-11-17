@@ -568,9 +568,19 @@ Remember: Be respectful, efficient, and accurate. Web automation is powerful - u
             if self.verbose:
                 print(f"[BROWSER AGENT] Error closing session: {e}")
 
+        # IMPORTANT: The MCP stdio_client uses anyio which requires context managers
+        # to be entered/exited in the same task. If cancelled, this may fail.
         try:
             if self.stdio_context:
                 await self.stdio_context.__aexit__(None, None, None)
+        except RuntimeError as e:
+            # Specifically suppress "cancel scope in different task" errors
+            # This happens when the agent is cancelled/timed out
+            if "cancel scope" in str(e).lower() or "different task" in str(e).lower():
+                # This is expected during cancellation, silently ignore
+                pass
+            elif self.verbose:
+                print(f"[BROWSER AGENT] Error closing stdio context: {e}")
         except Exception as e:
             if self.verbose:
                 print(f"[BROWSER AGENT] Error closing stdio context: {e}")

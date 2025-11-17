@@ -597,6 +597,20 @@ Remember: You're not just executing commands—you're helping users build a powe
                         f"Connection timeout after {connection_timeout}s. "
                         "The Notion MCP server may be slow or unavailable."
                     )
+                except RuntimeError as e:
+                    # Handle "cancel scope in different task" errors during init
+                    error_str = str(e).lower()
+                    if "cancel scope" in error_str or "different task" in error_str:
+                        # This is an MCP cleanup issue, not a real initialization failure
+                        # Try cleanup but don't propagate this specific error
+                        await self._cleanup_connection()
+                        raise RuntimeError(
+                            "Notion MCP connection was interrupted. This is usually temporary. "
+                            "Try again or set DISABLED_AGENTS=notion to skip this agent."
+                        )
+                    else:
+                        await self._cleanup_connection()
+                        raise
                 except Exception as e:
                     await self._cleanup_connection()
                     raise
@@ -1332,11 +1346,21 @@ Remember: You're not just executing commands—you're helping users build a powe
                 self.session_entered = False
 
         # Close stdio context if it was successfully entered
+        # IMPORTANT: The MCP stdio_client uses anyio which requires context managers
+        # to be entered/exited in the same task. If cancelled, this may fail.
         if self.stdio_context and self.stdio_context_entered:
             try:
                 await self.stdio_context.__aexit__(None, None, None)
+            except RuntimeError as e:
+                # Specifically suppress "cancel scope in different task" errors
+                # This happens when the agent is cancelled/timed out
+                if "cancel scope" in str(e).lower() or "different task" in str(e).lower():
+                    # This is expected during cancellation, silently ignore
+                    pass
+                elif self.verbose:
+                    print(f"[NOTION AGENT] Suppressed stdio cleanup error: {e}")
             except Exception as e:
-                # Suppress all cleanup errors
+                # Suppress all other cleanup errors
                 if self.verbose:
                     print(f"[NOTION AGENT] Suppressed stdio cleanup error: {e}")
             finally:

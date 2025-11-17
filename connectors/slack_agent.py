@@ -1546,11 +1546,21 @@ Remember: Slack is the nervous system of distributed teams. Every message you cr
                 self.session_entered = False
 
         # Close stdio context if it was successfully entered
+        # IMPORTANT: The MCP stdio_client uses anyio which requires context managers
+        # to be entered/exited in the same task. If cancelled, this may fail.
         if self.stdio_context and self.stdio_context_entered:
             try:
                 await self.stdio_context.__aexit__(None, None, None)
+            except RuntimeError as e:
+                # Specifically suppress "cancel scope in different task" errors
+                # This happens when the agent is cancelled/timed out
+                if "cancel scope" in str(e).lower() or "different task" in str(e).lower():
+                    # This is expected during cancellation, silently ignore
+                    pass
+                elif self.verbose:
+                    print(f"[SLACK AGENT] Suppressed stdio cleanup error: {e}")
             except Exception as e:
-                # Suppress all cleanup errors
+                # Suppress all other cleanup errors
                 if self.verbose:
                     print(f"[SLACK AGENT] Suppressed stdio cleanup error: {e}")
             finally:
