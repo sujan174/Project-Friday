@@ -288,6 +288,7 @@ class EnhancedUI:
             padding=(1, 2),
             title=f"[bold][{self.colors['primary']}]Aerius[/{self.colors['primary']}][/bold]",
             title_align="left",
+            expand=True,  # Expand to full terminal width to prevent truncation
         )
         self.console.print(panel)
         self.console.print()
