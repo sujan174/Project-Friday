@@ -632,30 +632,31 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
                     print(f"✗ {agent_name}: Unexpected error - {type(e).__name__}", flush=True)
                     return (agent_name, None, None, [f"  ✗ {agent_name} failed: {e}"])
 
-            print(f"\nLoading {len(connector_files)} agents sequentially (for stability)...", flush=True)
+            print(f"\nLoading {len(connector_files)} agents in parallel...", flush=True)
             print("=" * 60, flush=True)
 
-            # Load agents sequentially instead of parallel to avoid race conditions
-            # Parallel loading was causing:
-            # 1. MCP server output conflicts (multiple npx processes printing)
-            # 2. Resource contention (multiple agents trying to initialize simultaneously)
-            # 3. Inconsistent results (race conditions)
-            # Sequential loading is slower but much more reliable
-            results = []
-            for f in connector_files:
-                try:
-                    result = await load_with_timeout(f)
-                    results.append(result)
-                except asyncio.CancelledError:
-                    # Should never reach here due to task isolation, but handle defensively
-                    agent_name = f.stem.replace("_agent", "")
-                    print(f"✗ {agent_name}: Cancelled (isolated)", flush=True)
-                    results.append((agent_name, None, None, [f"✗ {agent_name} was cancelled"]))
-                    # DO NOT re-raise - suppress to prevent propagation
-                except Exception as e:
-                    agent_name = f.stem.replace("_agent", "")
-                    print(f"✗ {agent_name}: Exception during load - {type(e).__name__}", flush=True)
-                    results.append((agent_name, None, None, [f"✗ {agent_name} failed: {e}"]))
+            # Load all agents in parallel for speed
+            # Create all tasks at once
+            tasks = [load_with_timeout(f) for f in connector_files]
+
+            # Wait for all tasks to complete, capturing exceptions
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            # Process results - handle any exceptions that were returned
+            processed_results = []
+            for i, result in enumerate(results):
+                if isinstance(result, Exception):
+                    # Exception was raised during agent loading
+                    agent_name = connector_files[i].stem.replace("_agent", "")
+                    print(f"✗ {agent_name}: Exception during load - {type(result).__name__}", flush=True)
+                    if self.verbose:
+                        print(f"  Details: {str(result)[:200]}", flush=True)
+                    processed_results.append((agent_name, None, None, [f"✗ {agent_name} failed: {result}"]))
+                else:
+                    # Normal result
+                    processed_results.append(result)
+
+            results = processed_results
 
             successful = 0
             failed = 0
