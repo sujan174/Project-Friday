@@ -57,7 +57,9 @@ async def main():
         await orchestrator.discover_and_load_agents()
 
         # Small delay to ensure any residual MCP output completes
-        await asyncio.sleep(0.3)
+        # Use synchronous sleep to avoid issues with background task cancellations
+        import time
+        time.sleep(0.3)
 
         # Display loaded agents
         loaded_agents = []

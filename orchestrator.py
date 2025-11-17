@@ -382,40 +382,40 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
             "array": protos.Type.ARRAY,
         }
 
-    async def _cleanup_background_tasks(self, max_attempts: int = 15):
+    async def _cleanup_background_tasks(self):
         """
-        Wait for all lingering MCP background tasks to finish.
+        Forcefully cancel all pending background tasks from failed MCP agents.
 
-        When MCP agents (especially Notion) fail to initialize or timeout,
-        they leave background cleanup tasks running that can raise CancelledError.
-
-        This method repeatedly tries to sleep, catching CancelledError each time,
-        until all background tasks have finished or max_attempts is reached.
-
-        This prevents background task errors from propagating to the main event loop.
+        When MCP agents fail, they leave immortal background tasks that keep
+        raising CancelledError. We need to find and kill these tasks.
         """
-        cancelled_count = 0
+        import time
 
-        for attempt in range(max_attempts):
+        # Get all tasks except the current one
+        current_task = asyncio.current_task()
+        all_tasks = [t for t in asyncio.all_tasks() if t is not current_task and not t.done()]
+
+        if all_tasks:
+            if self.verbose:
+                print(f"[ORCHESTRATOR] Cancelling {len(all_tasks)} background tasks...")
+
+            # Cancel all background tasks
+            for task in all_tasks:
+                if not task.done():
+                    task.cancel()
+
+            # Give them time to respond to cancellation (synchronous to avoid being cancelled ourselves)
+            time.sleep(0.5)
+
+            # Gather all cancelled tasks (this will raise their CancelledErrors and clean them up)
             try:
-                # Try to sleep - if we succeed, all background tasks are done
-                await asyncio.sleep(0.1)
-                # Success! No CancelledError means background tasks are finished
-                if self.verbose and cancelled_count > 0:
-                    print(f"[ORCHESTRATOR] Absorbed {cancelled_count} CancelledErrors from background tasks")
-                return
-            except asyncio.CancelledError:
-                # Background task still running and cancelling operations
-                cancelled_count += 1
-                if self.verbose and attempt % 5 == 0:
-                    print(f"[ORCHESTRATOR] Waiting for background tasks to finish (attempt {attempt + 1}/{max_attempts})...")
-                # Continue to next attempt
-                continue
+                await asyncio.gather(*all_tasks, return_exceptions=True)
+            except Exception:
+                # Ignore all errors - we just want tasks to finish
+                pass
 
-        # If we get here, we hit max_attempts but tasks are still cancelling
-        # Log a warning but don't crash - just return
-        if cancelled_count > 0:
-            print(f"⚠ Background tasks still active after {max_attempts} attempts (absorbed {cancelled_count} cancellations)")
+            if self.verbose:
+                print(f"[ORCHESTRATOR] Background tasks cleaned up")
 
     async def _spinner(self, task: asyncio.Task, message: str):
         """Simple wrapper for tasks - just awaits the task"""
