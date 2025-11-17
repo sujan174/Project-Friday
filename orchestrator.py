@@ -1147,11 +1147,14 @@ Provide a concise summary that gives the user exactly what they need to know."""
         self.user_prefs.record_interaction_style(user_message)
 
         if not self.chat:
-            discover_task = asyncio.create_task(self.discover_and_load_agents())
-            await self._spinner(discover_task, "Discovering agents")
-
+            # Initialize chat with loaded agents (agents already loaded in main.py)
+            # Only reload if agents weren't loaded yet
             if not self.sub_agents:
-                return "No agents available. Please add agent connectors to the 'connectors' directory."
+                discover_task = asyncio.create_task(self.discover_and_load_agents())
+                await self._spinner(discover_task, "Discovering agents")
+
+                if not self.sub_agents:
+                    return "No agents available. Please add agent connectors to the 'connectors' directory."
 
             agent_tools = self._create_agent_tools()
 
