@@ -605,7 +605,8 @@ Remember: You're not just executing commands—you're helping users build a powe
                     except BaseException:
                         pass  # Suppress all cleanup errors (including CancelledError)
                     # Give background tasks time to finish cleanup
-                    await asyncio.sleep(0.1)
+                    # Use synchronous sleep since task is already cancelled
+                    time.sleep(0.1)
                     raise RuntimeError(
                         f"Connection cancelled during initialization. "
                         "The Notion MCP server may be slow or unavailable."
@@ -616,7 +617,8 @@ Remember: You're not just executing commands—you're helping users build a powe
                     except BaseException:
                         pass  # Suppress all cleanup errors (including CancelledError)
                     # Give background tasks time to finish cleanup
-                    await asyncio.sleep(0.1)
+                    # Use synchronous sleep to avoid issues if task is cancelled
+                    time.sleep(0.1)
                     raise RuntimeError(
                         f"Connection timeout after {connection_timeout}s. "
                         "The Notion MCP server may be slow or unavailable."
@@ -632,7 +634,7 @@ Remember: You're not just executing commands—you're helping users build a powe
                         except BaseException:
                             pass  # Suppress all cleanup errors (including CancelledError)
                         # Give background tasks time to finish cleanup
-                        await asyncio.sleep(0.1)
+                        time.sleep(0.1)
                         raise RuntimeError(
                             "Notion MCP connection was interrupted. This is usually temporary. "
                             "Try again or set DISABLED_AGENTS=notion to skip this agent."
@@ -643,7 +645,7 @@ Remember: You're not just executing commands—you're helping users build a powe
                         except BaseException:
                             pass  # Suppress all cleanup errors (including CancelledError)
                         # Give background tasks time to finish cleanup
-                        await asyncio.sleep(0.1)
+                        time.sleep(0.1)
                         raise
                 except Exception as e:
                     try:
@@ -651,7 +653,7 @@ Remember: You're not just executing commands—you're helping users build a powe
                     except BaseException:
                         pass  # Suppress all cleanup errors (including CancelledError)
                     # Give background tasks time to finish cleanup
-                    await asyncio.sleep(0.1)
+                    time.sleep(0.1)
                     raise
 
                 gemini_tools = [self._build_function_declaration(tool) for tool in self.available_tools]
