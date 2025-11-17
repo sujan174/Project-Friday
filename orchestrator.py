@@ -903,8 +903,16 @@ Provide a clear instruction describing what you want to accomplish.""",
         if len(response) < max_length or response.startswith('⚠️') or response.startswith('❌'):
             return response
 
-        # Don't summarize if response has structured data (lists, code blocks)
-        if '```' in response or response.count('\n-') > 5 or response.count('\n*') > 5:
+        # Don't summarize if response has structured data (lists, code blocks, bullet points)
+        # Check for various bullet formats: -, *, •, numbered lists
+        has_lists = (
+            '```' in response or
+            response.count('\n-') > 2 or
+            response.count('\n*') > 2 or
+            response.count('\n•') > 2 or
+            response.count('\n ') > 5  # Indented lists
+        )
+        if has_lists:
             # For structured data, just ensure it's clean
             return response
 
