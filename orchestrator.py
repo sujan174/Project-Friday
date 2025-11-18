@@ -384,33 +384,44 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
 
     async def _cleanup_background_tasks(self):
         """
-        Cancel all pending background tasks from failed MCP agents.
+        Aggressively cancel and await all pending background tasks from failed MCP agents.
 
         When MCP agents fail, they leave background tasks that keep
-        raising CancelledError. Just cancel them and let the event loop
-        clean them up - don't wait for them.
+        raising CancelledError. We need to properly cancel and AWAIT them
+        to ensure they're fully terminated before proceeding.
         """
-        import time
-
         # Get all tasks except the current one
         current_task = asyncio.current_task()
         all_tasks = [t for t in asyncio.all_tasks() if t is not current_task and not t.done()]
 
         if all_tasks:
             if self.verbose:
-                print(f"[ORCHESTRATOR] Cancelling {len(all_tasks)} background tasks...")
+                print(f"[ORCHESTRATOR] Found {len(all_tasks)} background tasks, cleaning up...")
 
             # Cancel all background tasks
             for task in all_tasks:
                 if not task.done():
                     task.cancel()
 
-            # Give them a moment to process cancellation (synchronous)
-            # Don't wait for them - event loop will clean up eventually
-            time.sleep(1.0)
+            # Actually WAIT for them to finish cancellation (this is the key fix)
+            # Use gather with return_exceptions to suppress CancelledError
+            if all_tasks:
+                await asyncio.gather(*all_tasks, return_exceptions=True)
 
             if self.verbose:
-                print(f"[ORCHESTRATOR] Background tasks cancelled")
+                print(f"[ORCHESTRATOR] All background tasks cleaned up")
+
+        # Extra verification: check if any new tasks appeared during cleanup
+        current_task = asyncio.current_task()
+        remaining_tasks = [t for t in asyncio.all_tasks() if t is not current_task and not t.done()]
+
+        if remaining_tasks:
+            if self.verbose:
+                print(f"[ORCHESTRATOR] WARNING: {len(remaining_tasks)} tasks still remain after cleanup")
+            # One more aggressive cleanup round
+            for task in remaining_tasks:
+                task.cancel()
+            await asyncio.gather(*remaining_tasks, return_exceptions=True)
 
     async def _spinner(self, task: asyncio.Task, message: str):
         """Simple wrapper for tasks - just awaits the task"""
@@ -525,15 +536,28 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
 
                 messages.append(f"  ✗ Failed to initialize {agent_name}: {short_msg}")
 
+                # Cleanup and ensure all spawned tasks from this agent are terminated
                 try:
                     if hasattr(agent_instance, 'cleanup'):
-                        await agent_instance.cleanup()
-                except Exception:
-                    pass
+                        cleanup_task = asyncio.create_task(agent_instance.cleanup())
+                        await asyncio.wait_for(cleanup_task, timeout=5.0)
+                except asyncio.TimeoutError:
+                    if self.verbose:
+                        print(f"  WARNING: {agent_name} cleanup timed out after 5s", flush=True)
+                except Exception as e:
+                    if self.verbose:
+                        print(f"  WARNING: {agent_name} cleanup error: {e}", flush=True)
+
+                # Aggressively cancel any tasks spawned by this agent
+                current_task = asyncio.current_task()
+                agent_tasks = [t for t in asyncio.all_tasks() if t is not current_task and not t.done()]
+                if agent_tasks:
+                    for t in agent_tasks:
+                        t.cancel()
+                    await asyncio.gather(*agent_tasks, return_exceptions=True)
 
                 # Give background tasks time to finish before next agent
-                # Use synchronous sleep since we're in a cancelled context
-                time.sleep(0.5)
+                time.sleep(0.3)
                 return (agent_name, None, None, messages)
 
             except Exception as init_error:
@@ -563,11 +587,28 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
 
                 messages.append(f"  ✗ Failed to initialize {agent_name}: {short_msg}")
 
+                # Cleanup and ensure all spawned tasks from this agent are terminated
                 try:
                     if hasattr(agent_instance, 'cleanup'):
-                        await agent_instance.cleanup()
-                except Exception:
-                    pass  # Silently ignore cleanup errors
+                        cleanup_task = asyncio.create_task(agent_instance.cleanup())
+                        await asyncio.wait_for(cleanup_task, timeout=5.0)
+                except asyncio.TimeoutError:
+                    if self.verbose:
+                        print(f"  WARNING: {agent_name} cleanup timed out after 5s", flush=True)
+                except Exception as e:
+                    if self.verbose:
+                        print(f"  WARNING: {agent_name} cleanup error: {e}", flush=True)
+
+                # Aggressively cancel any tasks spawned by this agent
+                current_task = asyncio.current_task()
+                agent_tasks = [t for t in asyncio.all_tasks() if t is not current_task and not t.done()]
+                if agent_tasks and self.verbose:
+                    print(f"  Cleaning up {len(agent_tasks)} background tasks from {agent_name}", flush=True)
+                if agent_tasks:
+                    for t in agent_tasks:
+                        t.cancel()
+                    await asyncio.gather(*agent_tasks, return_exceptions=True)
+
                 return (agent_name, None, None, messages)
 
         except Exception as e:
@@ -664,6 +705,15 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
         # These tasks can raise CancelledError and affect the main event loop
         # We need to absorb all CancelledErrors before returning to caller
         await self._cleanup_background_tasks()
+
+        # Additional safety: synchronous sleep to let event loop fully process cancellations
+        import time
+        time.sleep(0.5)
+
+        if self.verbose:
+            current_task = asyncio.current_task()
+            remaining = [t for t in asyncio.all_tasks() if t is not current_task and not t.done()]
+            print(f"[ORCHESTRATOR] Agent loading complete. Remaining background tasks: {len(remaining)}")
 
     def _create_agent_tools(self) -> List[protos.FunctionDeclaration]:
         tools = []

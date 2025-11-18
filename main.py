@@ -56,10 +56,14 @@ async def main():
         # MCP servers will output to stderr during initialization (suppressed)
         await orchestrator.discover_and_load_agents()
 
-        # Small delay to ensure any residual MCP output completes
-        # Use synchronous sleep to avoid issues with background task cancellations
-        import time
-        time.sleep(0.3)
+        # Verify that all background tasks have been cleaned up
+        if verbose:
+            current_task = asyncio.current_task()
+            remaining = [t for t in asyncio.all_tasks() if t is not current_task and not t.done()]
+            if remaining:
+                print(f"[MAIN] WARNING: {len(remaining)} background tasks still active after agent loading")
+            else:
+                print(f"[MAIN] All background tasks cleaned up successfully")
 
         # Display loaded agents
         loaded_agents = []
@@ -243,43 +247,26 @@ async def process_with_ui(
     orchestrator.call_sub_agent = wrapped_call_sub_agent
 
     try:
-        # Process the message
-        # Protect against lingering background task cancellations from failed agent init
-        max_retries = 5
+        # Process the message with shield protection
+        # asyncio.shield protects the task from being cancelled by external tasks
+        # This is crucial because failed MCP agents may leave background tasks
+        # that attempt to cancel operations in the main event loop
+        try:
+            # Create the processing task
+            processing_task = asyncio.create_task(orchestrator.process_message(user_message))
 
-        for attempt in range(max_retries):
-            # Before each attempt, aggressively cancel any lingering background tasks
-            if attempt > 0:
-                import time
-                current_task = asyncio.current_task()
-                all_tasks = [t for t in asyncio.all_tasks() if t is not current_task and not t.done()]
+            # Shield it from external cancellations
+            response = await asyncio.shield(processing_task)
+            return response
 
-                if all_tasks:
-                    print(f"[DEBUG] Attempt {attempt + 1}/{max_retries}: Found {len(all_tasks)} background tasks still running")
-                    for task in all_tasks:
-                        task.cancel()
-                    time.sleep(0.5)
-                else:
-                    print(f"[DEBUG] Attempt {attempt + 1}/{max_retries}: No background tasks found")
-
-            try:
-                print(f"[DEBUG] Attempt {attempt + 1}/{max_retries}: Processing message...")
-                response = await orchestrator.process_message(user_message)
-                print(f"[DEBUG] Attempt {attempt + 1}/{max_retries}: SUCCESS!")
-                return response
-            except asyncio.CancelledError as e:
-                # Background task (Task-22) from failed Notion agent is still alive and cancelling operations
-                print(f"[DEBUG] Attempt {attempt + 1}/{max_retries}: CANCELLED by background task")
-
-                if attempt < max_retries - 1:
-                    # Retry after delay
-                    import time
-                    time.sleep(1.0)
-                    continue
-                else:
-                    # Final attempt failed - background task is immortal
-                    print(f"[DEBUG] All {max_retries} attempts failed - background task is persistent")
-                    return "❌ System is still stabilizing from agent initialization. Please type your message again."
+        except asyncio.CancelledError:
+            # This should rarely happen with shield, but if it does, it means
+            # the current task itself was cancelled, not an external background task
+            ui.print_error("Operation was cancelled. Please try again.")
+            raise
+        except Exception as e:
+            # Handle any other errors normally
+            raise
 
     finally:
         # Restore original method
