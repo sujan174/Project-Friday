@@ -26,10 +26,10 @@ except ImportError:
     print("Note: Install 'rich' for enhanced UI experience (pip install -r requirements.txt)")
 
 
-def _sync_cleanup_background_tasks(verbose: bool = False):
+async def _async_cleanup_background_tasks(verbose: bool = False):
     """
-    Synchronously clean up background tasks without using await.
-    This is critical because async cleanup can itself be cancelled by rogue tasks.
+    Asynchronously clean up background tasks with proper await.
+    Protected by multiple layers of error handling to prevent cancellation.
     """
     import time
 
@@ -45,8 +45,26 @@ def _sync_cleanup_background_tasks(verbose: bool = False):
             if not task.done():
                 task.cancel()
 
-        # Use synchronous sleep to let them die
-        time.sleep(1.0)
+        # Actually wait for them to finish cancelling (with timeout)
+        try:
+            # Use wait_for with timeout to prevent hanging
+            await asyncio.wait_for(
+                asyncio.gather(*remaining, return_exceptions=True),
+                timeout=2.0
+            )
+        except asyncio.TimeoutError:
+            if verbose:
+                print(f"[MAIN] Cleanup timed out after 2s, using sync fallback")
+            time.sleep(1.0)  # Fallback to sync sleep
+        except asyncio.CancelledError:
+            # Even cleanup is being cancelled - use sync sleep as last resort
+            if verbose:
+                print(f"[MAIN] Cleanup was cancelled, using sync fallback")
+            time.sleep(1.0)
+        except Exception as e:
+            if verbose:
+                print(f"[MAIN] Cleanup error: {e}, using sync fallback")
+            time.sleep(1.0)
 
         if verbose:
             current_task = asyncio.current_task()
@@ -96,13 +114,16 @@ async def main():
                 print(f"[MAIN] Error during agent loading: {e}")
             # Continue anyway
 
-        # CRITICAL: Synchronous cleanup of background tasks
-        # We use synchronous cleanup because async cleanup can itself be cancelled
-        # by rogue async generators from failed MCP agents
+        # CRITICAL: Cleanup of background tasks with proper await
+        # Protected by error handling to prevent cancellation from affecting cleanup
         if verbose:
             print("[MAIN] Cleaning up background tasks from agent initialization...")
 
-        _sync_cleanup_background_tasks(verbose)
+        try:
+            await _async_cleanup_background_tasks(verbose)
+        except Exception as e:
+            if verbose:
+                print(f"[MAIN] Cleanup exception: {e}, continuing anyway")
 
         # Display loaded agents
         loaded_agents = []
@@ -154,8 +175,11 @@ async def main():
             await orchestrator.cleanup()
         except asyncio.CancelledError:
             if verbose:
-                print("[MAIN] Orchestrator cleanup was cancelled, using synchronous cleanup")
-            _sync_cleanup_background_tasks(verbose)
+                print("[MAIN] Orchestrator cleanup was cancelled, using async cleanup")
+            try:
+                await _async_cleanup_background_tasks(verbose)
+            except Exception:
+                pass  # Best effort cleanup
         except Exception as e:
             if verbose:
                 print(f"[MAIN] Error during orchestrator cleanup: {e}")
@@ -226,8 +250,11 @@ async def run_interactive_session(orchestrator: OrchestratorAgent, ui):
         except asyncio.CancelledError:
             # Handle cancellation gracefully
             ui.print_error("Operation was cancelled. Cleaning up...")
-            # Use synchronous cleanup to avoid being cancelled ourselves
-            _sync_cleanup_background_tasks(ui.verbose)
+            # Clean up background tasks
+            try:
+                await _async_cleanup_background_tasks(ui.verbose)
+            except Exception:
+                pass  # Best effort cleanup
             # Continue the session instead of crashing
             continue
         except Exception as e:
@@ -317,8 +344,10 @@ async def process_with_ui(
 
     try:
         # Clean up any lingering background tasks before processing
-        # Use synchronous cleanup to avoid being cancelled ourselves
-        _sync_cleanup_background_tasks(ui.verbose)
+        try:
+            await _async_cleanup_background_tasks(ui.verbose)
+        except Exception:
+            pass  # Best effort cleanup
 
         # Create the processing task
         processing_task = asyncio.create_task(orchestrator.process_message(user_message))
@@ -346,8 +375,11 @@ async def process_with_ui(
                 print("[MAIN] Processing was cancelled by background task")
             ui.print_error("Operation was cancelled. Please try again.")
 
-            # Clean up synchronously
-            _sync_cleanup_background_tasks(ui.verbose)
+            # Clean up background tasks
+            try:
+                await _async_cleanup_background_tasks(ui.verbose)
+            except Exception:
+                pass  # Best effort cleanup
 
             # Return error message instead of raising
             return "⚠️ Operation was cancelled due to background task interference. Please try again."
