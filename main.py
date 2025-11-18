@@ -30,11 +30,27 @@ async def _async_cleanup_background_tasks(verbose: bool = False):
     """
     Asynchronously clean up background tasks with proper await.
     Protected by multiple layers of error handling to prevent cancellation.
+
+    IMPORTANT: This should ONLY be called during:
+    - Application startup (after agent loading)
+    - Application shutdown
+    NOT during active message processing!
     """
     import time
 
     current_task = asyncio.current_task()
-    remaining = [t for t in asyncio.all_tasks() if t is not current_task and not t.done()]
+    # Filter out tasks, excluding current task and any tasks that look like main processing
+    remaining = []
+    for t in asyncio.all_tasks():
+        if t is current_task or t.done():
+            continue
+        # Don't cancel tasks that look like they're part of main processing
+        task_name = t.get_name()
+        if 'process_message' in task_name.lower() or 'process_with_ui' in task_name.lower():
+            if verbose:
+                print(f"[CLEANUP] Skipping main processing task: {task_name}")
+            continue
+        remaining.append(t)
 
     if remaining:
         if verbose:
@@ -54,22 +70,28 @@ async def _async_cleanup_background_tasks(verbose: bool = False):
                 print(f"[CLEANUP]   Task {i}: {task.get_name()} | Coro: {coro_name} | Done: {task.done()}")
             print(f"{'='*80}\n")
 
-        # Cancel all tasks
+        # Cancel all tasks with shield to prevent our cancellation from affecting us
         for task in remaining:
             if not task.done():
                 if verbose:
                     print(f"[CLEANUP] Cancelling task: {task.get_name()}")
-                task.cancel()
+                try:
+                    task.cancel()
+                except Exception as e:
+                    if verbose:
+                        print(f"[CLEANUP] Failed to cancel {task.get_name()}: {e}")
 
-        # Actually wait for them to finish cancelling (with timeout)
+        # Actually wait for them to finish cancelling (with timeout and shield)
         if verbose:
             print(f"[CLEANUP] Waiting for tasks to complete cancellation (2s timeout)...")
 
         try:
-            # Use wait_for with timeout to prevent hanging
-            await asyncio.wait_for(
-                asyncio.gather(*remaining, return_exceptions=True),
-                timeout=2.0
+            # Use shield to protect the gather from being cancelled by the tasks we're cleaning
+            await asyncio.shield(
+                asyncio.wait_for(
+                    asyncio.gather(*remaining, return_exceptions=True),
+                    timeout=2.0
+                )
             )
             if verbose:
                 print(f"[CLEANUP] All tasks completed cancellation successfully")
@@ -78,7 +100,7 @@ async def _async_cleanup_background_tasks(verbose: bool = False):
                 print(f"[CLEANUP] Cleanup timed out after 2s, using sync fallback")
             time.sleep(1.0)  # Fallback to sync sleep
         except asyncio.CancelledError:
-            # Even cleanup is being cancelled - use sync sleep as last resort
+            # Even with shield, we got cancelled - use sync sleep as last resort
             if verbose:
                 print(f"[CLEANUP] ⚠️  Cleanup itself was cancelled! Using sync fallback")
             time.sleep(1.0)
@@ -312,14 +334,14 @@ async def run_interactive_session(orchestrator: OrchestratorAgent, ui):
             ui.print_goodbye()
             break
         except asyncio.CancelledError:
-            # Handle cancellation gracefully
-            ui.print_error("Operation was cancelled. Cleaning up...")
-            # Clean up background tasks
-            try:
-                await _async_cleanup_background_tasks(ui.verbose)
-            except Exception:
-                pass  # Best effort cleanup
-            # Continue the session instead of crashing
+            # Handle cancellation gracefully - DO NOT cleanup background tasks here!
+            # Cleanup during active session can cause more cancellations
+            if ui.verbose:
+                print("[SESSION] Operation cancelled, continuing session without cleanup")
+            ui.print_error("Operation was cancelled.")
+
+            # Just continue the session - background tasks will be cleaned up at session end
+            # Aggressive cleanup here causes cascading cancellations
             continue
         except Exception as e:
             ui.print_error(str(e))
@@ -407,42 +429,44 @@ async def process_with_ui(
     orchestrator.call_sub_agent = wrapped_call_sub_agent
 
     try:
-        # Clean up any lingering background tasks before processing
+        # DO NOT cleanup background tasks before processing!
+        # This causes cancellation cascades where background tasks cancel the main processing task
+        # Background tasks from agent initialization should remain until session end
         if ui.verbose:
             print(f"\n[PROCESS] Starting message processing: '{user_message[:50]}...'")
             current_task = asyncio.current_task()
-            all_tasks = [t for t in asyncio.all_tasks() if t is not current_task]
-            print(f"[PROCESS] Background tasks before cleanup: {len(all_tasks)}")
+            all_tasks = [t for t in asyncio.all_tasks() if t is not current_task and not t.done()]
+            print(f"[PROCESS] Active background tasks: {len(all_tasks)}")
+            if all_tasks:
+                for i, task in enumerate(all_tasks[:5], 1):  # Show first 5
+                    print(f"[PROCESS]   Task {i}: {task.get_name()}")
 
+        # Create the processing task with protection from cancellation
+        # Use shield to protect from external cancellations by background tasks
+        if ui.verbose:
+            print(f"[PROCESS] Creating protected processing task...")
+
+        # Process with timeout and cancellation protection
         try:
-            await _async_cleanup_background_tasks(ui.verbose)
-        except Exception as e:
+            # Shield the processing from external cancellations
+            processing_task = asyncio.create_task(orchestrator.process_message(user_message))
+
             if ui.verbose:
-                print(f"[PROCESS] Cleanup exception (continuing): {e}")
+                print(f"[PROCESS] Processing task created: {processing_task.get_name()}")
+                print(f"[PROCESS] Awaiting response (300s timeout)...\n")
 
-        if ui.verbose:
-            current_task = asyncio.current_task()
-            all_tasks = [t for t in asyncio.all_tasks() if t is not current_task]
-            print(f"[PROCESS] Background tasks after cleanup: {len(all_tasks)}")
-            print(f"[PROCESS] Creating processing task...")
+            # Use shield to protect from background task interference
+            response = await asyncio.shield(
+                asyncio.wait_for(processing_task, timeout=300.0)
+            )
 
-        # Create the processing task
-        processing_task = asyncio.create_task(orchestrator.process_message(user_message))
-
-        if ui.verbose:
-            print(f"[PROCESS] Processing task created: {processing_task.get_name()}")
-            print(f"[PROCESS] Awaiting response (300s timeout)...\n")
-
-        # Process with timeout protection
-        try:
-            response = await asyncio.wait_for(processing_task, timeout=300.0)  # 5 minute timeout
             if ui.verbose:
                 print(f"\n[PROCESS] ✓ Processing completed successfully")
             return response
 
         except asyncio.TimeoutError:
             if ui.verbose:
-                print("[MAIN] Processing timed out, cancelling...")
+                print("[PROCESS] Processing timed out, cancelling...")
             processing_task.cancel()
             try:
                 await processing_task
@@ -453,52 +477,44 @@ async def process_with_ui(
             return "⚠️ Operation timed out after 5 minutes. Please try a simpler request."
 
         except asyncio.CancelledError as ce:
-            # Processing was cancelled by background task
+            # Shield was cancelled - this means the OUTER task was cancelled, not the processing task
+            # This should be very rare with shield protection
             if ui.verbose:
                 print(f"\n{'!'*80}")
-                print(f"[PROCESS] ⚠️  CANCELLATION DETECTED!")
-                print(f"[PROCESS] CancelledError: {ce}")
+                print(f"[PROCESS] ⚠️  SHIELD CANCELLATION DETECTED!")
+                print(f"[PROCESS] The shield itself was cancelled: {ce}")
+                print(f"[PROCESS] This indicates the entire event loop or session is being shut down")
 
-                # Show current task state
+                # Check if processing task completed anyway
                 current_task = asyncio.current_task()
                 print(f"[PROCESS] Current task: {current_task.get_name()}")
                 print(f"[PROCESS] Processing task done: {processing_task.done()}")
-                if processing_task.done():
-                    try:
-                        exc = processing_task.exception()
-                        print(f"[PROCESS] Processing task exception: {exc}")
-                    except:
-                        pass
 
-                # Show all background tasks
-                all_tasks = [t for t in asyncio.all_tasks() if t is not current_task and not t.done()]
-                print(f"[PROCESS] Active background tasks: {len(all_tasks)}")
-                for i, task in enumerate(all_tasks, 1):
-                    coro_name = "unknown"
+                # Try to get result if processing actually completed
+                if processing_task.done() and not processing_task.cancelled():
                     try:
-                        if hasattr(task, 'get_coro'):
-                            coro = task.get_coro()
-                            coro_name = f"{coro.__name__}" if hasattr(coro, '__name__') else str(coro)
-                        elif hasattr(task, '_coro'):
-                            coro_name = str(task._coro)
-                    except:
-                        pass
-                    print(f"[PROCESS]   Task {i}: {task.get_name()} | Coro: {coro_name}")
+                        result = processing_task.result()
+                        print(f"[PROCESS] Processing actually completed! Returning result.")
+                        print(f"{'!'*80}\n")
+                        return result
+                    except Exception as e:
+                        print(f"[PROCESS] Processing failed: {e}")
+
                 print(f"{'!'*80}\n")
 
-            ui.print_error("Operation was cancelled. Please try again.")
-
-            # Clean up background tasks
-            if ui.verbose:
-                print(f"[PROCESS] Attempting cleanup after cancellation...")
-            try:
-                await _async_cleanup_background_tasks(ui.verbose)
-            except Exception as e:
-                if ui.verbose:
-                    print(f"[PROCESS] Cleanup after cancellation failed: {e}")
+            # Cancel the processing task if it's still running
+            if not processing_task.done():
+                processing_task.cancel()
+                try:
+                    await processing_task
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    pass
 
             # Return error message instead of raising
-            return "⚠️ Operation was cancelled due to background task interference. Please try again."
+            ui.print_error("Operation was interrupted. This usually means the session is shutting down.")
+            return "⚠️ Operation was interrupted. If this persists, try restarting the application."
 
         except Exception as e:
             # Handle any other errors normally
