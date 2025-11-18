@@ -458,180 +458,24 @@ async def process_with_ui(
     orchestrator.call_sub_agent = wrapped_call_sub_agent
 
     try:
-        # Check for dangerous background tasks before processing
-        # If zombie tasks exist (like async_generator_athrow), we need to clean them up
-        current_task = asyncio.current_task()
-        background_tasks = [t for t in asyncio.all_tasks() if t is not current_task and not t.done()]
+        # Simple direct call - no isolation, no shields
+        # MCP connections stay open, managed by agents themselves
+        response = await orchestrator.process_message(user_message)
+        return response
 
+    except asyncio.CancelledError:
+        # Handle cancellation gracefully
         if ui.verbose:
-            print(f"\n[PROCESS] Starting message processing: '{user_message[:50]}...'")
-            print(f"[PROCESS] Active background tasks: {len(background_tasks)}")
-            if background_tasks:
-                for i, task in enumerate(background_tasks[:5], 1):  # Show first 5
-                    coro_name = "unknown"
-                    try:
-                        if hasattr(task, 'get_coro'):
-                            coro = task.get_coro()
-                            coro_name = f"{coro.__name__}" if hasattr(coro, '__name__') else str(coro)
-                        elif hasattr(task, '_coro'):
-                            coro_name = str(task._coro)
-                    except:
-                        pass
-                    print(f"[PROCESS]   Task {i}: {task.get_name()} | Coro: {coro_name}")
-
-        # If dangerous tasks detected (async generators), clean them up BEFORE processing
-        if background_tasks:
-            dangerous_tasks = []
-            for task in background_tasks:
-                task_name = task.get_name()
-                try:
-                    if hasattr(task, 'get_coro'):
-                        coro = task.get_coro()
-                        coro_str = str(coro)
-                        if 'async_generator' in coro_str.lower():
-                            dangerous_tasks.append(task)
-                except:
-                    pass
-
-            if dangerous_tasks:
-                if ui.verbose:
-                    print(f"[PROCESS] ⚠️  Detected {len(dangerous_tasks)} dangerous async generator tasks")
-                    print(f"[PROCESS] Cleaning them up before processing to prevent cancellation...")
-
-                # Aggressively cancel and wait for these tasks
-                for task in dangerous_tasks:
-                    task.cancel()
-
-                # Wait for them to finish with a short timeout
-                try:
-                    await asyncio.wait_for(
-                        asyncio.gather(*dangerous_tasks, return_exceptions=True),
-                        timeout=1.0
-                    )
-                except asyncio.TimeoutError:
-                    if ui.verbose:
-                        print(f"[PROCESS] Dangerous task cleanup timed out, proceeding anyway")
-                except Exception as e:
-                    if ui.verbose:
-                        print(f"[PROCESS] Cleanup error: {e}, proceeding anyway")
-
-                # Small delay for event loop cleanup
-                import time
-                time.sleep(0.1)
-
-                if ui.verbose:
-                    print(f"[PROCESS] Cleanup complete, proceeding with processing\n")
-
-        # Create the processing task with protection from cancellation
-        # Use shield to protect from external cancellations by background tasks
-        if ui.verbose:
-            print(f"[PROCESS] Creating protected processing task...")
-
-        # CRITICAL: Wrapper to isolate anyio operations from asyncio event loop
-        # This prevents anyio cancel scopes from escaping and cancelling the shield
-        async def isolated_process():
-            """Wrapper that isolates anyio cancel scopes within this task boundary"""
-            try:
-                return await orchestrator.process_message(user_message)
-            except RuntimeError as e:
-                # Catch "cancel scope in different task" errors from anyio
-                error_str = str(e).lower()
-                if "cancel scope" in error_str or "different task" in error_str:
-                    if ui.verbose:
-                        print(f"[PROCESS] ⚠️ anyio cancel scope error detected: {e}")
-                        print(f"[PROCESS] Reinitializing agent connections...")
-                    # Reinitialize all MCP agents to clear corrupted state
-                    for agent_name, agent in orchestrator.sub_agents.items():
-                        try:
-                            if hasattr(agent, 'cleanup') and hasattr(agent, 'initialize'):
-                                await agent.cleanup()
-                                await agent.initialize()
-                        except:
-                            pass
-                    raise RuntimeError("Agent connection error. Please try again.") from e
-                raise
-
-        # Process with timeout and cancellation protection
-        try:
-            # Shield the processing from external cancellations
-            processing_task = asyncio.create_task(isolated_process())
-
-            if ui.verbose:
-                print(f"[PROCESS] Processing task created: {processing_task.get_name()}")
-                print(f"[PROCESS] Awaiting response (300s timeout)...\n")
-
-            # Use shield to protect from background task interference
-            response = await asyncio.shield(
-                asyncio.wait_for(processing_task, timeout=300.0)
-            )
-
-            if ui.verbose:
-                print(f"\n[PROCESS] ✓ Processing completed successfully")
-            return response
-
-        except asyncio.TimeoutError:
-            if ui.verbose:
-                print("[PROCESS] Processing timed out, cancelling...")
-            processing_task.cancel()
-            try:
-                await processing_task
-            except asyncio.CancelledError:
-                pass
-            except Exception:
-                pass
-            return "⚠️ Operation timed out after 5 minutes. Please try a simpler request."
-
-        except asyncio.CancelledError as ce:
-            # Shield was cancelled - this means the OUTER task was cancelled, not the processing task
-            # This should be very rare with shield protection
-            if ui.verbose:
-                print(f"\n{'!'*80}")
-                print(f"[PROCESS] ⚠️  SHIELD CANCELLATION DETECTED!")
-                print(f"[PROCESS] The shield itself was cancelled: {ce}")
-                print(f"[PROCESS] This indicates the entire event loop or session is being shut down")
-
-                # Check if processing task completed anyway
-                current_task = asyncio.current_task()
-                print(f"[PROCESS] Current task: {current_task.get_name()}")
-                print(f"[PROCESS] Processing task done: {processing_task.done()}")
-
-                # Try to get result if processing actually completed
-                if processing_task.done() and not processing_task.cancelled():
-                    try:
-                        result = processing_task.result()
-                        print(f"[PROCESS] Processing actually completed! Returning result.")
-                        print(f"{'!'*80}\n")
-                        return result
-                    except Exception as e:
-                        print(f"[PROCESS] Processing failed: {e}")
-
-                print(f"{'!'*80}\n")
-
-            # Cancel the processing task if it's still running
-            if not processing_task.done():
-                processing_task.cancel()
-                try:
-                    await processing_task
-                except asyncio.CancelledError:
-                    pass
-                except Exception:
-                    pass
-
-            # Return error message instead of raising
-            ui.print_error("Operation was interrupted. This usually means the session is shutting down.")
-            return "⚠️ Operation was interrupted. If this persists, try restarting the application."
-
-        except Exception as e:
-            # Handle any other errors normally
-            if ui.verbose:
-                print(f"[MAIN] Processing error: {e}")
-            raise
+            print(f"[PROCESS] Operation was cancelled")
+        return "⚠️ Operation was cancelled."
 
     except Exception as e:
-        # Outer catch-all to ensure we always restore the original method
+        # Handle any other errors
         if ui.verbose:
-            print(f"[MAIN] Outer exception: {e}")
-        raise
+            print(f"[PROCESS] Error during processing: {e}")
+            import traceback
+            traceback.print_exc()
+        return f"⚠️ An error occurred: {str(e)}"
 
     finally:
         # Restore original method

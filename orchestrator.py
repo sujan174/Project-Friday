@@ -1447,21 +1447,6 @@ Provide a concise summary that gives the user exactly what they need to know."""
 
                     print(f"⚠ {agent_name} agent operation timed out")
 
-                    # CRITICAL: Clean up and reinitialize agent after timeout
-                    try:
-                        if agent_name in self.sub_agents:
-                            agent = self.sub_agents[agent_name]
-                            if hasattr(agent, 'cleanup') and hasattr(agent, 'initialize'):
-                                await agent.cleanup()
-                                if self.verbose:
-                                    print(f"[ORCHESTRATOR] Cleaned up {agent_name} after timeout, reinitializing...")
-                                await agent.initialize()
-                                if self.verbose:
-                                    print(f"[ORCHESTRATOR] {agent_name} reinitialized after timeout")
-                    except Exception as cleanup_error:
-                        if self.verbose:
-                            print(f"[ORCHESTRATOR] Warning: Cleanup/reinit error after timeout: {cleanup_error}")
-
                 except Exception as e:
                     error_str = str(e)
 
@@ -1520,21 +1505,6 @@ Provide a concise summary that gives the user exactly what they need to know."""
                             print(f"[INCONSISTENT RESPONSES] Pattern: {dup_pattern}")
 
                     print(f"✗ {agent_name} agent failed: {e}")
-
-                    # CRITICAL: Clean up and reinitialize agent after exception
-                    try:
-                        if agent_name in self.sub_agents:
-                            agent = self.sub_agents[agent_name]
-                            if hasattr(agent, 'cleanup') and hasattr(agent, 'initialize'):
-                                await agent.cleanup()
-                                if self.verbose:
-                                    print(f"[ORCHESTRATOR] Cleaned up {agent_name} after exception, reinitializing...")
-                                await agent.initialize()
-                                if self.verbose:
-                                    print(f"[ORCHESTRATOR] {agent_name} reinitialized after exception")
-                    except Exception as cleanup_error:
-                        if self.verbose:
-                            print(f"[ORCHESTRATOR] Warning: Cleanup/reinit error after exception: {cleanup_error}")
 
                 function_result = {
                     'name': tool_name,
