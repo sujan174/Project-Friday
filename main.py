@@ -161,6 +161,21 @@ async def run_interactive_session(orchestrator: OrchestratorAgent, ui):
         except KeyboardInterrupt:
             ui.print_goodbye()
             break
+        except asyncio.CancelledError:
+            # Handle cancellation gracefully
+            ui.print_error("Operation was cancelled. Cleaning up...")
+            # Clean up background tasks
+            current_task = asyncio.current_task()
+            remaining_tasks = [t for t in asyncio.all_tasks() if t is not current_task and not t.done()]
+            if remaining_tasks:
+                for t in remaining_tasks:
+                    t.cancel()
+                try:
+                    await asyncio.gather(*remaining_tasks, return_exceptions=True)
+                except Exception:
+                    pass
+            # Continue the session instead of crashing
+            continue
         except Exception as e:
             ui.print_error(str(e))
             if ui.verbose:
@@ -252,6 +267,22 @@ async def process_with_ui(
         # This is crucial because failed MCP agents may leave background tasks
         # that attempt to cancel operations in the main event loop
         try:
+            # Clean up any lingering background tasks before processing
+            # This prevents old tasks from interfering with new requests
+            current_task = asyncio.current_task()
+            lingering_tasks = [t for t in asyncio.all_tasks() if t is not current_task and not t.done()]
+            if lingering_tasks:
+                if ui.verbose:
+                    print(f"[MAIN] Cleaning up {len(lingering_tasks)} lingering tasks before processing...")
+                for t in lingering_tasks:
+                    t.cancel()
+                try:
+                    await asyncio.gather(*lingering_tasks, return_exceptions=True)
+                except asyncio.CancelledError:
+                    pass  # Absorb cancellations
+                except Exception:
+                    pass  # Absorb any other errors
+
             # Create the processing task
             processing_task = asyncio.create_task(orchestrator.process_message(user_message))
 
@@ -262,8 +293,25 @@ async def process_with_ui(
         except asyncio.CancelledError:
             # This should rarely happen with shield, but if it does, it means
             # the current task itself was cancelled, not an external background task
+            # Don't crash - just show error and let the user retry
             ui.print_error("Operation was cancelled. Please try again.")
-            raise
+
+            # Clean up any remaining background tasks
+            current_task = asyncio.current_task()
+            remaining_tasks = [t for t in asyncio.all_tasks() if t is not current_task and not t.done()]
+            if remaining_tasks:
+                if ui.verbose:
+                    print(f"[MAIN] Cleaning up {len(remaining_tasks)} tasks after cancellation...")
+                for t in remaining_tasks:
+                    t.cancel()
+                try:
+                    await asyncio.gather(*remaining_tasks, return_exceptions=True)
+                except Exception:
+                    pass  # Absorb all errors during cleanup
+
+            # Return error message instead of raising
+            return "⚠️ Operation was cancelled due to background task interference. Please try again."
+
         except Exception as e:
             # Handle any other errors normally
             raise
