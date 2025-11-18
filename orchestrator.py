@@ -389,6 +389,8 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
         When MCP agents fail, they leave background tasks that keep
         raising CancelledError. We need to properly cancel and AWAIT them
         to ensure they're fully terminated before proceeding.
+
+        This function must be robust against being cancelled itself by rogue tasks.
         """
         # Get all tasks except the current one
         current_task = asyncio.current_task()
@@ -403,10 +405,23 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
                 if not task.done():
                     task.cancel()
 
-            # Actually WAIT for them to finish cancellation (this is the key fix)
-            # Use gather with return_exceptions to suppress CancelledError
-            if all_tasks:
-                await asyncio.gather(*all_tasks, return_exceptions=True)
+            # Actually WAIT for them to finish cancellation
+            # Wrap in try/except because the cleanup itself can be cancelled by rogue tasks
+            # We MUST complete this cleanup even if we're being cancelled
+            try:
+                # Use shield to protect the gather from external cancellations
+                await asyncio.shield(asyncio.gather(*all_tasks, return_exceptions=True))
+            except asyncio.CancelledError:
+                # Even with shield, we might get cancelled
+                # Force wait without shield as last resort
+                try:
+                    await asyncio.gather(*all_tasks, return_exceptions=True)
+                except asyncio.CancelledError:
+                    # If we STILL get cancelled, just wait synchronously with a timeout
+                    import time
+                    if self.verbose:
+                        print(f"[ORCHESTRATOR] WARNING: Cleanup was cancelled, using fallback sync wait")
+                    time.sleep(2.0)  # Give tasks time to die
 
             if self.verbose:
                 print(f"[ORCHESTRATOR] All background tasks cleaned up")
@@ -421,7 +436,12 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
             # One more aggressive cleanup round
             for task in remaining_tasks:
                 task.cancel()
-            await asyncio.gather(*remaining_tasks, return_exceptions=True)
+            try:
+                await asyncio.gather(*remaining_tasks, return_exceptions=True)
+            except asyncio.CancelledError:
+                # Absorb cancellation - we've done our best
+                if self.verbose:
+                    print(f"[ORCHESTRATOR] Second cleanup round cancelled, continuing anyway")
 
     async def _spinner(self, task: asyncio.Task, message: str):
         """Simple wrapper for tasks - just awaits the task"""
@@ -554,10 +574,14 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
                 if agent_tasks:
                     for t in agent_tasks:
                         t.cancel()
-                    await asyncio.gather(*agent_tasks, return_exceptions=True)
+                    try:
+                        await asyncio.gather(*agent_tasks, return_exceptions=True)
+                    except asyncio.CancelledError:
+                        # Absorb cancellation during cleanup
+                        pass
 
                 # Give background tasks time to finish before next agent
-                time.sleep(0.3)
+                time.sleep(0.5)
                 return (agent_name, None, None, messages)
 
             except Exception as init_error:
@@ -607,8 +631,14 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
                 if agent_tasks:
                     for t in agent_tasks:
                         t.cancel()
-                    await asyncio.gather(*agent_tasks, return_exceptions=True)
+                    try:
+                        await asyncio.gather(*agent_tasks, return_exceptions=True)
+                    except asyncio.CancelledError:
+                        # Absorb cancellation during cleanup
+                        pass
 
+                # Give background tasks time to finish before next agent
+                time.sleep(0.5)
                 return (agent_name, None, None, messages)
 
         except Exception as e:
@@ -676,15 +706,29 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
                 # Small delay between agents to allow MCP background tasks to finish cleanup
                 # This prevents one agent's cleanup from interfering with the next agent's initialization
                 import time
-                time.sleep(0.2)
+                time.sleep(0.5)
 
             except asyncio.CancelledError:
                 # Catch cancellation at top level too, just in case
                 agent_name = file_path.stem.replace("_agent", "")
-                print(f"✗ {agent_name}: Initialization cancelled", flush=True)
+                print(f"✗ {agent_name}: Initialization cancelled (from previous agent)", flush=True)
+
+                # Clean up any lingering tasks before continuing
+                current_task = asyncio.current_task()
+                lingering_tasks = [t for t in asyncio.all_tasks() if t is not current_task and not t.done()]
+                if lingering_tasks:
+                    if self.verbose:
+                        print(f"  Cleaning up {len(lingering_tasks)} lingering tasks before next agent", flush=True)
+                    for t in lingering_tasks:
+                        t.cancel()
+                    try:
+                        await asyncio.gather(*lingering_tasks, return_exceptions=True)
+                    except asyncio.CancelledError:
+                        pass  # Absorb
+
                 # Don't propagate - continue loading other agents
                 import time
-                time.sleep(0.5)
+                time.sleep(1.0)  # Longer delay after cancellation
 
             except Exception as e:
                 agent_name = file_path.stem.replace("_agent", "")
