@@ -21,6 +21,7 @@ from llms.gemini_flash import GeminiFlash
 # Import intelligence components for smart agents
 from connectors.agent_intelligence import WorkspaceKnowledge, SharedContext
 from connectors.agent_logger import SessionLogger
+from core.unified_session_logger import UnifiedSessionLogger
 
 # Import advanced intelligence system
 from intelligence import (
@@ -153,8 +154,11 @@ class OrchestratorAgent:
         # Feature #11: Simple progress tracking for streaming
         self.operation_count = 0  # Track number of operations in current request
 
-        # Session logging
+        # Session logging - OLD SYSTEM (keeping for backward compatibility)
         self.session_logger = SessionLogger(log_dir="logs", session_id=self.session_id)
+
+        # NEW UNIFIED SESSION LOGGER - Creates only 2 files per session
+        self.unified_logger = UnifiedSessionLogger(session_id=self.session_id, log_dir="logs")
 
         # Initialize observability system (tracing, metrics, specialized loggers)
         self.observability = initialize_observability(
@@ -856,8 +860,15 @@ Provide a clear instruction describing what you want to accomplish.""",
             if context_str:
                 full_instruction = f"Context from previous steps:\n{context_str}\n\nTask: {instruction}"
 
-            # Log message to agent
+            # Log message to agent (old system)
             self.session_logger.log_message_to_agent(agent_name, full_instruction)
+
+            # UNIFIED LOGGING - Log orchestrator -> agent
+            self.unified_logger.log_orchestrator_to_agent(
+                agent_name=agent_name,
+                instruction=full_instruction,
+                context=context
+            )
 
             # Execute the agent
             result = await agent.execute(full_instruction)
@@ -884,8 +895,17 @@ Provide a clear instruction describing what you want to accomplish.""",
                 error_message=error
             )
 
-            # Log response from agent
+            # Log response from agent (old system)
             self.session_logger.log_message_from_agent(agent_name, result, success, error)
+
+            # UNIFIED LOGGING - Log agent -> orchestrator
+            self.unified_logger.log_agent_to_orchestrator(
+                agent_name=agent_name,
+                response=result,
+                success=success,
+                duration_ms=latency_ms,
+                error=error
+            )
 
             # Update health status on success
             if success and agent_name in self.agent_health:
@@ -1090,8 +1110,24 @@ Provide a clear instruction describing what you want to accomplish.""",
 
         return intelligence
 
+    def _log_and_return_response(self, response: str) -> str:
+        """Helper method to log assistant response and return it"""
+        self.unified_logger.log_assistant_response(
+            response=response,
+            metadata={'response_length': len(response)}
+        )
+        return response
+
     async def process_message(self, user_message: str) -> str:
         """Process a user message with orchestration"""
+
+        # ===================================================================
+        # UNIFIED SESSION LOGGING - Log user message
+        # ===================================================================
+        self.unified_logger.log_user_message(
+            message=user_message,
+            metadata={'message_length': len(user_message)}
+        )
 
         # ===================================================================
         # USER PREFERENCES & ANALYTICS TRACKING
@@ -1115,7 +1151,7 @@ Provide a clear instruction describing what you want to accomplish.""",
             await self._spinner(discover_task, "Discovering agents")
 
             if not self.sub_agents:
-                return "No agents available. Please add agent connectors to the 'connectors' directory."
+                return self._log_and_return_response("No agents available. Please add agent connectors to the 'connectors' directory.")
 
             # Create model with agent tools using LLM abstraction
             agent_tools = self._create_agent_tools()
@@ -1138,6 +1174,41 @@ Provide a clear instruction describing what you want to accomplish.""",
         # Process with Hybrid Intelligence System v5.0 (async)
         intelligence = await self._process_with_intelligence(user_message)
 
+        # ===================================================================
+        # UNIFIED SESSION LOGGING - Log intelligence status
+        # ===================================================================
+        self.unified_logger.log_intelligence_status(
+            intelligence_result={
+                'path_used': intelligence.get('path_used', 'unknown'),
+                'latency_ms': intelligence.get('latency_ms', 0),
+                'intents': [str(i) for i in intelligence.get('intents', [])],
+                'entities': [
+                    {
+                        'type': str(e.entity_type) if hasattr(e, 'entity_type') else 'unknown',
+                        'value': str(e.value) if hasattr(e, 'value') else str(e),
+                        'confidence': float(e.confidence) if hasattr(e, 'confidence') else 0.0
+                    } for e in intelligence.get('entities', [])
+                ],
+                'confidence': intelligence.get('confidence', 0.0),
+                'reasoning': intelligence.get('reasoning', ''),
+                'ambiguities': intelligence.get('ambiguities', []),
+                'suggested_clarifications': intelligence.get('suggested_clarifications', [])
+            },
+            execution_plan={
+                'tasks': [
+                    {
+                        'id': task.get('id', ''),
+                        'agent': task.get('agent', ''),
+                        'action': task.get('action', ''),
+                        'estimated_duration_ms': task.get('estimated_duration', 0)
+                    } for task in intelligence.get('execution_plan', {}).get('tasks', [])
+                ],
+                'total_estimated_duration_ms': intelligence.get('execution_plan', {}).get('total_duration', 0),
+                'estimated_cost_tokens': intelligence.get('execution_plan', {}).get('total_tokens', 0)
+            },
+            turn_complete=False  # Will be set to True when response is sent
+        )
+
         # Use resolved message if references were resolved
         message_to_send = intelligence.get('resolved_message', user_message)
 
@@ -1152,7 +1223,7 @@ Provide a clear instruction describing what you want to accomplish.""",
             )
             if clarifications:
                 self.ui.print_response("\n".join(clarifications[:2]))
-                return "I need more information to proceed. " + clarifications[0]
+                return self._log_and_return_response("I need more information to proceed. " + clarifications[0])
 
         # Log intelligence insights
         if self.verbose:
@@ -1400,13 +1471,13 @@ Provide a clear instruction describing what you want to accomplish.""",
 
         # Extract text from final LLM response
         if llm_response and llm_response.text:
-            return llm_response.text
+            return self._log_and_return_response(llm_response.text)
 
         # Fallback: Try to extract from raw response object
         if response and hasattr(response, 'candidates') and response.candidates:
             try:
                 # Try to get text property (may fail if there are function_call parts)
-                return response.text
+                return self._log_and_return_response(response.text)
             except Exception:
                 # Manual extraction from parts
                 text_parts = []
@@ -1415,10 +1486,10 @@ Provide a clear instruction describing what you want to accomplish.""",
                         text_parts.append(part.text)
 
                 if text_parts:
-                    return '\n'.join(text_parts)
+                    return self._log_and_return_response('\n'.join(text_parts))
 
         # If we still don't have text, return a generic message
-        return "⚠️ Task completed but response formatting failed. The operations were executed successfully."
+        return self._log_and_return_response("⚠️ Task completed but response formatting failed. The operations were executed successfully.")
 
     def _should_retry_operation(self, error_str: str, operation_key: str) -> bool:
         """
