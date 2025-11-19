@@ -29,15 +29,18 @@ class SimpleSessionLogger:
 
         Args:
             session_id: Unique session identifier
-            log_dir: Directory to store log files
+            log_dir: Base directory to store log files
         """
         self.session_id = session_id
-        self.log_dir = Path(log_dir)
-        self.log_dir.mkdir(parents=True, exist_ok=True)
+        self.base_log_dir = Path(log_dir)
 
-        # Two log files
-        self.conversations_file = self.log_dir / f"session_{session_id}_conversations.txt"
-        self.intelligence_file = self.log_dir / f"session_{session_id}_intelligence.txt"
+        # Create session-specific folder
+        self.session_dir = self.base_log_dir / session_id
+        self.session_dir.mkdir(parents=True, exist_ok=True)
+
+        # Two log files inside session folder
+        self.conversations_file = self.session_dir / "conversations.txt"
+        self.intelligence_file = self.session_dir / "intelligence.txt"
 
         # Thread safety
         self._lock = threading.Lock()
@@ -387,6 +390,10 @@ class SimpleSessionLogger:
         if len(output) > max_length:
             output = output[:max_length] + "..."
         return output
+
+    def get_session_dir(self) -> str:
+        """Get path to session directory"""
+        return str(self.session_dir)
 
     def get_conversation_log_path(self) -> str:
         """Get path to conversations log file"""

@@ -1806,9 +1806,9 @@ Provide a clear instruction describing what you want to accomplish.""",
         if hasattr(self, 'simple_logger'):
             self.simple_logger.close()
             if self.verbose:
-                print(f"{C.GREEN}  ✓ Simple session logs saved:{C.ENDC}")
-                print(f"{C.GREEN}    - {self.simple_logger.get_conversation_log_path()}{C.ENDC}")
-                print(f"{C.GREEN}    - {self.simple_logger.get_intelligence_log_path()}{C.ENDC}")
+                print(f"{C.GREEN}  ✓ Simple session logs saved to: {self.simple_logger.get_session_dir()}{C.ENDC}")
+                print(f"{C.GREEN}    - conversations.txt{C.ENDC}")
+                print(f"{C.GREEN}    - intelligence.txt{C.ENDC}")
     
     async def run_interactive(self):
         """Run interactive chat session"""
