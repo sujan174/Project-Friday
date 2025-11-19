@@ -766,12 +766,27 @@ Remember: Calendar management is about respecting time - the most finite resourc
                 print(f"[GOOGLE CALENDAR AGENT] Initializing connection to Google Calendar MCP server")
 
             # Google Calendar credentials should be in environment
-            client_id = os.environ.get("GOOGLE_CLIENT_ID")
-            client_secret = os.environ.get("GOOGLE_CLIENT_SECRET")
+            client_id = os.environ.get("GOOGLE_CLIENT_ID", "")
+            client_secret = os.environ.get("GOOGLE_CLIENT_SECRET", "")
             redirect_uri = os.environ.get("GOOGLE_REDIRECT_URI", "http://localhost:4153/oauth2callback")
             use_manual_auth = os.environ.get("USE_MANUAL_AUTH", "false")
 
-            if not all([client_id, client_secret]):
+            # Check if credentials look like placeholders
+            is_placeholder_id = (not client_id or
+                               "your_google_client_id_here" in client_id or
+                               len(client_id.strip()) < 10)
+            is_placeholder_secret = (not client_secret or
+                                    "your_google_client_secret_here" in client_secret or
+                                    len(client_secret.strip()) < 10)
+
+            if self.verbose:
+                print(f"[GOOGLE CALENDAR AGENT] Client ID length: {len(client_id)}")
+                print(f"[GOOGLE CALENDAR AGENT] Client Secret length: {len(client_secret)}")
+                print(f"[GOOGLE CALENDAR AGENT] USE_MANUAL_AUTH: {use_manual_auth}")
+
+            if is_placeholder_id or is_placeholder_secret:
+                print(f"[GOOGLE CALENDAR AGENT] ❌ Client ID: {'PLACEHOLDER or EMPTY' if is_placeholder_id else 'SET'}")
+                print(f"[GOOGLE CALENDAR AGENT] ❌ Client Secret: {'PLACEHOLDER or EMPTY' if is_placeholder_secret else 'SET'}")
                 raise ValueError(
                     "Google Calendar authentication required. Please set:\n"
                     "  - GOOGLE_CLIENT_ID\n"
