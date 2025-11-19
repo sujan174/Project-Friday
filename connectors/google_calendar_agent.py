@@ -597,9 +597,10 @@ Agent: "✓ Created: Code Review Session
 "Google Calendar authentication needed. The system requires:
  1. Google OAuth 2.0 credentials configured
  2. Calendar API access enabled
- 3. Proper authentication tokens refreshed
+ 3. Redirect URI configured: http://localhost:4153/oauth2callback
 
- Please check GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REFRESH_TOKEN environment variables."
+ Please check GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET environment variables.
+ A browser window should open for you to authenticate when the agent starts."
 ```
 
 **Permission Denied**:
@@ -767,20 +768,21 @@ Remember: Calendar management is about respecting time - the most finite resourc
             # Google Calendar credentials should be in environment
             client_id = os.environ.get("GOOGLE_CLIENT_ID")
             client_secret = os.environ.get("GOOGLE_CLIENT_SECRET")
-            refresh_token = os.environ.get("GOOGLE_REFRESH_TOKEN")
+            redirect_uri = os.environ.get("GOOGLE_REDIRECT_URI", "http://localhost:4153/oauth2callback")
 
-            if not all([client_id, client_secret, refresh_token]):
+            if not all([client_id, client_secret]):
                 raise ValueError(
                     "Google Calendar authentication required. Please set:\n"
                     "  - GOOGLE_CLIENT_ID\n"
                     "  - GOOGLE_CLIENT_SECRET\n"
-                    "  - GOOGLE_REFRESH_TOKEN\n\n"
+                    "  - GOOGLE_REDIRECT_URI (optional, default: http://localhost:4153/oauth2callback)\n\n"
                     "To obtain these:\n"
                     "1. Go to https://console.cloud.google.com\n"
                     "2. Create a new project or select existing\n"
                     "3. Enable Google Calendar API\n"
-                    "4. Create OAuth 2.0 credentials\n"
-                    "5. Generate refresh token using OAuth playground\n"
+                    "4. Create OAuth 2.0 credentials (Desktop app)\n"
+                    "5. Add redirect URI: http://localhost:4153/oauth2callback\n\n"
+                    "Note: When you start the agent, a browser will open for you to authenticate.\n"
                     "See setup instructions for detailed steps."
                 )
 
@@ -789,7 +791,7 @@ Remember: Calendar management is about respecting time - the most finite resourc
                 **os.environ,
                 "GOOGLE_CLIENT_ID": client_id,
                 "GOOGLE_CLIENT_SECRET": client_secret,
-                "GOOGLE_REFRESH_TOKEN": refresh_token
+                "GOOGLE_REDIRECT_URI": redirect_uri
             }
             if not self.verbose:
                 # Suppress debug output from MCP server
