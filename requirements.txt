@@ -1,0 +1,38 @@
+# ============================================================================
+# Project Friday - Requirements
+# ============================================================================
+
+# Core Dependencies (Currently Used)
+# ============================================================================
+google-generativeai>=0.8.0    # Gemini API for LLM
+python-dotenv>=1.0.0          # Environment variable management
+mcp>=1.0.0                     # Model Context Protocol
+
+# ============================================================================
+# ML Engineering Dependencies (For Continuous Learning Implementation)
+# ============================================================================
+# Uncomment these when implementing the ML features from the analysis:
+
+# torch>=2.1.0                 # PyTorch for ML models
+# transformers>=4.36.0         # Hugging Face Transformers (BERT, DistilBERT)
+# scikit-learn>=1.3.0          # ML utilities, evaluation metrics
+# numpy>=1.24.0                # Numerical computing
+# pandas>=2.0.0                # Data manipulation and analysis
+
+# ============================================================================
+# Continuous Learning & Monitoring (Phase 5-7)
+# ============================================================================
+# schedule>=1.2.0              # Automated retraining scheduler
+# matplotlib>=3.7.0            # Plotting accuracy trends
+# seaborn>=0.12.0              # Statistical visualizations
+# tensorboard>=2.15.0          # Model training visualization
+
+# ============================================================================
+# Optional: Production Enhancements
+# ============================================================================
+# redis>=5.0.0                 # Distributed caching (multi-instance)
+# prometheus-client>=0.19.0    # Metrics for monitoring
+# sentry-sdk>=1.39.0           # Error tracking
+# fastapi>=0.109.0             # REST API (if building web interface)
+# uvicorn>=0.25.0              # ASGI server
+# pydantic>=2.5.0              # Data validation
