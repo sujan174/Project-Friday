@@ -20,8 +20,6 @@ from llms.gemini_flash import GeminiFlash
 
 # Import intelligence components for smart agents
 from connectors.agent_intelligence import WorkspaceKnowledge, SharedContext
-from connectors.agent_logger import SessionLogger
-from core.unified_session_logger import UnifiedSessionLogger
 from core.simple_session_logger import SimpleSessionLogger
 
 # Import advanced intelligence system
@@ -151,13 +149,8 @@ class OrchestratorAgent:
         # Feature #11: Simple progress tracking for streaming
         self.operation_count = 0  # Track number of operations in current request
 
-        # Session logging - OLD SYSTEM (keeping for backward compatibility)
-        self.session_logger = SessionLogger(log_dir="logs", session_id=self.session_id)
-
-        # NEW UNIFIED SESSION LOGGER - Creates only 2 files per session
-        self.unified_logger = UnifiedSessionLogger(session_id=self.session_id, log_dir="logs")
-
         # SIMPLE SESSION LOGGER - 2 human-readable text files per session
+        # This replaces the old SessionLogger and UnifiedSessionLogger
         self.simple_logger = SimpleSessionLogger(session_id=self.session_id, log_dir="logs")
 
         # Initialize observability system (tracing, metrics, specialized loggers)
@@ -269,7 +262,7 @@ class OrchestratorAgent:
         if self.verbose:
             print(f"{C.CYAN}🧠 Intelligence enabled: Session {self.session_id[:8]}...{C.ENDC}")
             print(f"{C.CYAN}📊 Advanced Intelligence: Intent, Entity, Task, Confidence, Context{C.ENDC}")
-            print(f"{C.CYAN}📝 Logging to: {self.session_logger.get_log_path()}{C.ENDC}")
+            print(f"{C.CYAN}📝 Logging to: {self.simple_logger.get_session_dir()}{C.ENDC}")
             print(f"{C.CYAN}🔄 Retry, 📊 Analytics, 🧠 Preferences, ↩️  Undo - All enabled{C.ENDC}")
 
         self.system_prompt = """You are an AI orchestration system that coordinates specialized agents to help users accomplish complex tasks across multiple platforms and tools.
@@ -545,7 +538,7 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
                     shared_context=self.shared_context,
                     knowledge_base=self.knowledge_base,
                     llm=self.llm,
-                    session_logger=self.session_logger
+                    simple_logger=self.simple_logger
                 )
             except TypeError:
                 # Fallback: Try without LLM
@@ -850,16 +843,6 @@ Provide a clear instruction describing what you want to accomplish.""",
             if context_str:
                 full_instruction = f"Context from previous steps:\n{context_str}\n\nTask: {instruction}"
 
-            # Log message to agent (old system)
-            self.session_logger.log_message_to_agent(agent_name, full_instruction)
-
-            # UNIFIED LOGGING - Log orchestrator -> agent
-            self.unified_logger.log_orchestrator_to_agent(
-                agent_name=agent_name,
-                instruction=full_instruction,
-                context=context
-            )
-
             # SIMPLE LOGGING - Log orchestrator -> agent
             self.simple_logger.log_orchestrator_to_agent(agent_name, full_instruction)
 
@@ -886,18 +869,6 @@ Provide a clear instruction describing what you want to accomplish.""",
                 success=success,
                 latency_ms=latency_ms,
                 error_message=error
-            )
-
-            # Log response from agent (old system)
-            self.session_logger.log_message_from_agent(agent_name, result, success, error)
-
-            # UNIFIED LOGGING - Log agent -> orchestrator
-            self.unified_logger.log_agent_to_orchestrator(
-                agent_name=agent_name,
-                response=result,
-                success=success,
-                duration_ms=latency_ms,
-                error=error
             )
 
             # SIMPLE LOGGING - Log agent -> orchestrator
@@ -1158,24 +1129,12 @@ Provide a clear instruction describing what you want to accomplish.""",
 
     def _log_and_return_response(self, response: str) -> str:
         """Helper method to log assistant response and return it"""
-        self.unified_logger.log_assistant_response(
-            response=response,
-            metadata={'response_length': len(response)}
-        )
         # SIMPLE LOGGING - Log orchestrator response
         self.simple_logger.log_orchestrator_response(response)
         return response
 
     async def process_message(self, user_message: str) -> str:
         """Process a user message with orchestration"""
-
-        # ===================================================================
-        # UNIFIED SESSION LOGGING - Log user message
-        # ===================================================================
-        self.unified_logger.log_user_message(
-            message=user_message,
-            metadata={'message_length': len(user_message)}
-        )
 
         # SIMPLE SESSION LOGGING - Log user message
         self.simple_logger.log_user_message(user_message)
@@ -1224,45 +1183,6 @@ Provide a clear instruction describing what you want to accomplish.""",
 
         # Process with Hybrid Intelligence System v5.0 (async)
         intelligence = await self._process_with_intelligence(user_message)
-
-        # ===================================================================
-        # UNIFIED SESSION LOGGING - Log intelligence status
-        # ===================================================================
-        # Extract confidence score properly (it's a Confidence object)
-        confidence_obj = intelligence.get('confidence')
-        confidence_score = confidence_obj.score if hasattr(confidence_obj, 'score') else 0.0
-
-        self.unified_logger.log_intelligence_status(
-            intelligence_result={
-                'path_used': intelligence.get('hybrid_path_used', 'unknown'),
-                'latency_ms': intelligence.get('hybrid_latency_ms', 0),
-                'intents': [str(i) for i in intelligence.get('intents', [])],
-                'entities': [
-                    {
-                        'type': str(e.type.value) if hasattr(e, 'type') else 'unknown',
-                        'value': str(e.value) if hasattr(e, 'value') else str(e),
-                        'confidence': float(e.confidence) if hasattr(e, 'confidence') else 0.0
-                    } for e in intelligence.get('entities', [])
-                ],
-                'confidence': confidence_score,
-                'reasoning': intelligence.get('hybrid_reasoning', ''),
-                'ambiguities': intelligence.get('ambiguities', []),
-                'suggested_clarifications': intelligence.get('suggested_clarifications', [])
-            },
-            execution_plan={
-                'tasks': [
-                    {
-                        'id': task.get('id', ''),
-                        'agent': task.get('agent', ''),
-                        'action': task.get('action', ''),
-                        'estimated_duration_ms': task.get('estimated_duration', 0)
-                    } for task in intelligence.get('execution_plan', {}).get('tasks', [])
-                ],
-                'total_estimated_duration_ms': intelligence.get('execution_plan', {}).get('total_duration', 0),
-                'estimated_cost_tokens': intelligence.get('execution_plan', {}).get('total_tokens', 0)
-            },
-            turn_complete=False  # Will be set to True when response is sent
-        )
 
         # Use resolved message if references were resolved
         message_to_send = intelligence.get('resolved_message', user_message)
@@ -1795,12 +1715,6 @@ Provide a clear instruction describing what you want to accomplish.""",
                     print(f"{C.GREEN}  ✓ Observability data exported{C.ENDC}")
             except Exception as e:
                 logger.warning(f"Failed to export observability data: {e}")
-
-        # Close session logger and generate summary
-        if hasattr(self, 'session_logger'):
-            self.session_logger.close()
-            if self.verbose:
-                print(f"{C.GREEN}  ✓ Session log saved: {self.session_logger.get_log_path()}{C.ENDC}")
 
         # Close simple session logger
         if hasattr(self, 'simple_logger'):
