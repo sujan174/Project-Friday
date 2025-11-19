@@ -22,6 +22,7 @@ from llms.gemini_flash import GeminiFlash
 from connectors.agent_intelligence import WorkspaceKnowledge, SharedContext
 from connectors.agent_logger import SessionLogger
 from core.unified_session_logger import UnifiedSessionLogger
+from core.simple_session_logger import SimpleSessionLogger
 
 # Import advanced intelligence system
 from intelligence import (
@@ -155,6 +156,9 @@ class OrchestratorAgent:
 
         # NEW UNIFIED SESSION LOGGER - Creates only 2 files per session
         self.unified_logger = UnifiedSessionLogger(session_id=self.session_id, log_dir="logs")
+
+        # SIMPLE SESSION LOGGER - 2 human-readable text files per session
+        self.simple_logger = SimpleSessionLogger(session_id=self.session_id, log_dir="logs")
 
         # Initialize observability system (tracing, metrics, specialized loggers)
         self.observability = initialize_observability(
@@ -763,6 +767,14 @@ Provide a clear instruction describing what you want to accomplish.""",
                 metadata={'operation_key': operation_key}
             )
 
+        # SIMPLE LOGGING - Log agent selection
+        available_agents = list(self.sub_agents.keys())
+        self.simple_logger.log_agent_selection(
+            selected_agent=agent_name,
+            reason=f"Task requires {agent_name} capabilities",
+            considered_agents=available_agents
+        )
+
         # Define the operation to execute
         async def execute_operation():
             # Log task started
@@ -848,6 +860,9 @@ Provide a clear instruction describing what you want to accomplish.""",
                 context=context
             )
 
+            # SIMPLE LOGGING - Log orchestrator -> agent
+            self.simple_logger.log_orchestrator_to_agent(agent_name, full_instruction)
+
             # Execute the agent
             result = await agent.execute(full_instruction)
 
@@ -883,6 +898,15 @@ Provide a clear instruction describing what you want to accomplish.""",
                 success=success,
                 duration_ms=latency_ms,
                 error=error
+            )
+
+            # SIMPLE LOGGING - Log agent -> orchestrator
+            self.simple_logger.log_agent_to_orchestrator(
+                agent_name=agent_name,
+                response=result,
+                success=success,
+                error=error,
+                duration_ms=latency_ms
             )
 
             # Update health status on success
@@ -968,6 +992,9 @@ Provide a clear instruction describing what you want to accomplish.""",
             import time
             start_time = time.time()
 
+        # SIMPLE LOGGING - Log intelligence processing start
+        self.simple_logger.log_intelligence_start(user_message)
+
         # Get conversation context for better understanding
         context_dict = self.context_manager.get_relevant_context(user_message)
 
@@ -995,6 +1022,14 @@ Provide a clear instruction describing what you want to accomplish.""",
                 cache_hit=(hybrid_result.path_used == 'fast')  # Fast path is effectively cached
             )
 
+        # SIMPLE LOGGING - Log intent classification
+        self.simple_logger.log_intent_classification(
+            intents=[str(i) for i in intents],
+            confidence=hybrid_result.confidence,
+            method=f"hybrid_{hybrid_result.path_used}",
+            reasoning=hybrid_result.reasoning
+        )
+
         # Log entity extraction with hybrid intelligence metadata
         if hasattr(self, 'intel_logger') and entities:
             entity_dict = {}
@@ -1012,6 +1047,20 @@ Provide a clear instruction describing what you want to accomplish.""",
                 confidence=hybrid_result.confidence,  # Use hybrid result confidence
                 duration_ms=hybrid_result.latency_ms,  # Already included in classification time
                 cache_hit=(hybrid_result.path_used == 'fast')
+            )
+
+        # SIMPLE LOGGING - Log entity extraction
+        if entities:
+            entity_list = []
+            for ent in entities:
+                entity_list.append({
+                    'type': str(getattr(ent, 'type', 'unknown').value) if hasattr(getattr(ent, 'type', None), 'value') else str(getattr(ent, 'type', 'unknown')),
+                    'value': str(getattr(ent, 'value', str(ent))),
+                    'confidence': float(getattr(ent, 'confidence', 0.0))
+                })
+            self.simple_logger.log_entity_extraction(
+                entities=entity_list,
+                confidence=hybrid_result.confidence
             )
 
         # 2. Score confidence (combines hybrid result with other factors)
@@ -1088,6 +1137,23 @@ Provide a clear instruction describing what you want to accomplish.""",
             if hybrid_result.ambiguities:
                 print(f"  {C.YELLOW}Ambiguities: {', '.join(hybrid_result.ambiguities[:2])}{C.ENDC}")
 
+        # SIMPLE LOGGING - Log decision based on action recommendation
+        action_rec, explanation = intelligence['action_recommendation']
+        self.simple_logger.log_decision(
+            decision_type=action_rec,
+            action=f"Process with {hybrid_result.path_used} intelligence path",
+            reasoning=explanation
+        )
+
+        # SIMPLE LOGGING - Log intelligence processing complete
+        import time
+        total_duration = (time.time() - start_time) * 1000
+        confidence_score = confidence.score if hasattr(confidence, 'score') else 0.5
+        self.simple_logger.log_intelligence_complete(
+            total_duration_ms=total_duration,
+            success=(confidence_score > 0.3)
+        )
+
         return intelligence
 
     def _log_and_return_response(self, response: str) -> str:
@@ -1096,6 +1162,8 @@ Provide a clear instruction describing what you want to accomplish.""",
             response=response,
             metadata={'response_length': len(response)}
         )
+        # SIMPLE LOGGING - Log orchestrator response
+        self.simple_logger.log_orchestrator_response(response)
         return response
 
     async def process_message(self, user_message: str) -> str:
@@ -1108,6 +1176,9 @@ Provide a clear instruction describing what you want to accomplish.""",
             message=user_message,
             metadata={'message_length': len(user_message)}
         )
+
+        # SIMPLE SESSION LOGGING - Log user message
+        self.simple_logger.log_user_message(user_message)
 
         # ===================================================================
         # USER PREFERENCES & ANALYTICS TRACKING
@@ -1730,6 +1801,14 @@ Provide a clear instruction describing what you want to accomplish.""",
             self.session_logger.close()
             if self.verbose:
                 print(f"{C.GREEN}  ✓ Session log saved: {self.session_logger.get_log_path()}{C.ENDC}")
+
+        # Close simple session logger
+        if hasattr(self, 'simple_logger'):
+            self.simple_logger.close()
+            if self.verbose:
+                print(f"{C.GREEN}  ✓ Simple session logs saved:{C.ENDC}")
+                print(f"{C.GREEN}    - {self.simple_logger.get_conversation_log_path()}{C.ENDC}")
+                print(f"{C.GREEN}    - {self.simple_logger.get_intelligence_log_path()}{C.ENDC}")
     
     async def run_interactive(self):
         """Run interactive chat session"""
