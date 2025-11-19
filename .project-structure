@@ -1,0 +1,51 @@
+Project Structure
+=================
+
+Root Files:
+  config.py          - Central configuration
+  orchestrator.py    - Main orchestration engine
+
+Core Packages:
+  core/              - Core utilities
+    ├── error_handler.py      - Error classification & handling
+    ├── input_validator.py    - Input validation & sanitization
+    ├── logger.py             - Logging wrapper (backwards compat)
+    └── logging_config.py     - Enhanced logging system
+
+  connectors/        - Agent connectors
+    ├── base_agent.py         - Base agent interface
+    ├── slack_agent.py        - Slack integration
+    ├── jira_agent.py         - Jira integration
+    ├── github_agent.py       - GitHub integration
+    ├── notion_agent.py       - Notion integration
+    ├── browser_agent.py      - Browser automation
+    ├── scraper_agent.py      - Web scraping
+    └── code_reviewer_agent.py - Code review
+
+  orchestration/     - Orchestration system
+    ├── action_model.py       - Action data models
+    ├── action_parser.py      - Parse actions from LLM
+    ├── action_enricher.py    - Enrich actions with context
+    └── confirmation_queue.py - Confirmation management
+
+  intelligence/      - AI intelligence components
+    ├── intent_classifier.py  - Intent classification
+    ├── entity_extractor.py   - Entity extraction
+    ├── task_decomposer.py    - Task decomposition
+    └── context_manager.py    - Context management
+
+  llms/              - LLM abstraction layer
+    ├── base_llm.py           - Base LLM interface
+    └── gemini_flash.py       - Gemini implementation
+
+  ui/                - User interface
+    ├── terminal_ui.py        - Terminal UI components
+    └── confirmation_ui.py    - Confirmation interface
+
+  scripts/           - Utility scripts
+    └── migrate_logging.py    - Logging migration tool
+
+  data/              - Data storage
+    └── workspace_knowledge.json - Persistent knowledge
+
+  logs/              - Log files (gitignored)
