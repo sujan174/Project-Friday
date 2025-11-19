@@ -769,20 +769,24 @@ Remember: Calendar management is about respecting time - the most finite resourc
             client_id = os.environ.get("GOOGLE_CLIENT_ID")
             client_secret = os.environ.get("GOOGLE_CLIENT_SECRET")
             redirect_uri = os.environ.get("GOOGLE_REDIRECT_URI", "http://localhost:4153/oauth2callback")
+            use_manual_auth = os.environ.get("USE_MANUAL_AUTH", "false")
 
             if not all([client_id, client_secret]):
                 raise ValueError(
                     "Google Calendar authentication required. Please set:\n"
                     "  - GOOGLE_CLIENT_ID\n"
                     "  - GOOGLE_CLIENT_SECRET\n"
-                    "  - GOOGLE_REDIRECT_URI (optional, default: http://localhost:4153/oauth2callback)\n\n"
+                    "  - GOOGLE_REDIRECT_URI (optional, default: http://localhost:4153/oauth2callback)\n"
+                    "  - USE_MANUAL_AUTH (optional, set to 'true' for manual authentication)\n\n"
                     "To obtain these:\n"
                     "1. Go to https://console.cloud.google.com\n"
                     "2. Create a new project or select existing\n"
                     "3. Enable Google Calendar API\n"
                     "4. Create OAuth 2.0 credentials (Desktop app)\n"
                     "5. Add redirect URI: http://localhost:4153/oauth2callback\n\n"
-                    "Note: When you start the agent, a browser will open for you to authenticate.\n"
+                    "Note: When you start the agent:\n"
+                    "  - If USE_MANUAL_AUTH=true: You'll get a URL to open manually\n"
+                    "  - Otherwise: Browser will open automatically\n"
                     "See setup instructions for detailed steps."
                 )
 
@@ -791,7 +795,8 @@ Remember: Calendar management is about respecting time - the most finite resourc
                 **os.environ,
                 "GOOGLE_CLIENT_ID": client_id,
                 "GOOGLE_CLIENT_SECRET": client_secret,
-                "GOOGLE_REDIRECT_URI": redirect_uri
+                "GOOGLE_REDIRECT_URI": redirect_uri,
+                "USE_MANUAL_AUTH": use_manual_auth
             }
             if not self.verbose:
                 # Suppress debug output from MCP server
