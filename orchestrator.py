@@ -442,7 +442,8 @@ Adjust your communication style accordingly."""
         unhealthy_agents = []
         for agent_name in self.sub_agents.keys():
             if hasattr(self, 'circuit_breaker'):
-                state = self.circuit_breaker.get_circuit_state(agent_name)
+                health = self.circuit_breaker.get_health_status(agent_name)
+                state = health.get('state', 'closed')
                 if state and state != 'closed':
                     unhealthy_agents.append(f"{agent_name} ({state})")
 
