@@ -17,7 +17,7 @@ Version: 3.0 - Major refactoring with LLM support
 """
 
 import re
-from typing import List, Dict, Set, Optional, Any, Tuple
+from typing import List, Dict, Optional, Any, Tuple
 from .base_types import Intent, IntentType
 from .cache_layer import get_global_cache, CacheKeyBuilder
 

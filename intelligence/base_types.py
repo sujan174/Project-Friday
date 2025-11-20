@@ -9,7 +9,7 @@ Version: 3.0 - Major refactoring with enterprise-grade patterns
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set, Tuple, Union, Callable
+from typing import Any, Dict, List, Optional, Set, Tuple
 from enum import Enum
 from datetime import datetime
 from abc import ABC, abstractmethod

@@ -6,7 +6,7 @@ For new code, import from logging_config instead.
 """
 
 import logging
-from core.logging_config import EnhancedLogger, configure_logging, get_logger as _get_logger
+from core.logging_config import configure_logging, get_logger as _get_logger
 
 # For backwards compatibility
 class Logger:

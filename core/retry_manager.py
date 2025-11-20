@@ -18,7 +18,7 @@ from typing import Dict, List, Optional, Callable, Any
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from core.error_handler import ErrorClassifier, ErrorClassification, ErrorCategory
+from core.error_handler import ErrorClassifier, ErrorClassification
 
 
 @dataclass

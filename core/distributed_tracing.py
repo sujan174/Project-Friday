@@ -27,7 +27,7 @@ import uuid
 import json
 import threading
 from typing import Dict, List, Optional, Any
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from contextvars import ContextVar

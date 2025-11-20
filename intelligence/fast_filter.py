@@ -17,7 +17,6 @@ Version: 5.0 - Production Implementation
 import re
 import time
 from typing import Dict, List, Optional, Tuple, Set
-from enum import Enum
 
 from .base_types import Intent, IntentType, Entity, EntityType
 

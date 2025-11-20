@@ -19,13 +19,13 @@ Version: 3.0 - Major refactoring with NER and relationships
 """
 
 import re
-from typing import List, Dict, Optional, Tuple, Set
+from typing import List, Dict, Optional, Tuple
 from datetime import datetime, timedelta
 from .base_types import (
     Entity, EntityType, EntityRelationship, EntityGraph,
     RelationType, create_entity_id
 )
-from .cache_layer import get_global_cache, CacheKeyBuilder
+from .cache_layer import get_global_cache
 
 
 class EntityExtractor:

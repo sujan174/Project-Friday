@@ -8,7 +8,7 @@ Author: AI System
 Version: 2.0
 """
 
-from typing import List, Dict, Optional, Set, Tuple
+from typing import List, Dict, Optional, Tuple
 from .base_types import (
     Task, Intent, IntentType, Entity, EntityType,
     ExecutionPlan, DependencyGraph
