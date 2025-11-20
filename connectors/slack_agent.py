@@ -1016,6 +1016,96 @@ Remember: Slack is the nervous system of distributed teams. Every message you cr
 
         return json.dumps(response_data)
 
+    def _get_cached_users_response(self) -> Optional[str]:
+        """
+        Get cached users formatted as JSON response (cache-first optimization).
+
+        This method returns the cached users in the same format that the
+        slack_list_users API would return, allowing us to avoid API calls
+        for frequently used user listings.
+
+        Returns:
+            JSON string with users data, or None if cache is empty
+        """
+        cached_users = self.metadata_cache.get('users', {})
+
+        # If cache is empty, return None to fall back to API call
+        if not cached_users:
+            return None
+
+        # Convert cached users to the format expected by the LLM
+        users_list = []
+        for user_id, user_info in cached_users.items():
+            users_list.append({
+                'id': user_info.get('id', user_id),
+                'name': user_info.get('name', ''),
+                'real_name': user_info.get('real_name', ''),
+                'is_bot': user_info.get('is_bot', False),
+                'is_active': user_info.get('is_active', True)
+            })
+
+        # Format as JSON response
+        response_data = {
+            'members': users_list,
+            'cached': True,  # Mark that this came from cache
+            'timestamp': time.time()
+        }
+
+        return json.dumps(response_data)
+
+    def _get_cached_channel_info_response(self, channel_name: str) -> Optional[str]:
+        """
+        Get cached channel info formatted as JSON response (cache-first optimization).
+
+        This method returns the cached channel info in the same format that the
+        slack_get_channel_info API would return.
+
+        Args:
+            channel_name: Name of the channel (with or without #)
+
+        Returns:
+            JSON string with channel info, or None if not cached
+        """
+        # Clean channel name
+        clean_name = channel_name.lstrip('#').lower()
+
+        # Try to find channel by name
+        cached_channel = self.get_cached_channel_by_name(clean_name)
+
+        if not cached_channel:
+            return None
+
+        # Format as JSON response
+        response_data = {
+            'channel': {
+                'id': cached_channel.get('id', ''),
+                'name': cached_channel.get('name', ''),
+                'is_private': cached_channel.get('is_private', False),
+                'is_archived': cached_channel.get('is_archived', False),
+                'num_members': cached_channel.get('num_members', 0),
+                'topic': cached_channel.get('topic', ''),
+                'purpose': cached_channel.get('purpose', '')
+            },
+            'cached': True,
+            'timestamp': time.time()
+        }
+
+        return json.dumps(response_data)
+
+    def _invalidate_cache_after_write(self, operation_type: str, channel_name: str = None):
+        """
+        Invalidate relevant cache entries after write operations.
+
+        Args:
+            operation_type: Type of operation (create_channel, archive_channel, etc.)
+            channel_name: Optional channel name for targeted invalidation
+        """
+        # Invalidate channels cache for channel-modifying operations
+        if operation_type in ['create_channel', 'archive_channel', 'unarchive_channel', 'rename_channel']:
+            self.knowledge.invalidate_metadata_cache('slack')
+            if self.verbose:
+                print(f"[SLACK AGENT] Invalidated channels cache after {operation_type}")
+
     # ========================================================================
     # CORE EXECUTION ENGINE
     # ========================================================================
@@ -1244,7 +1334,7 @@ Remember: Slack is the nervous system of distributed teams. Every message you cr
         retry_count = 0
         delay = RetryConfig.INITIAL_DELAY
 
-        # OPTIMIZATION: Check cache first for slack_list_channels to avoid unnecessary API calls
+        # OPTIMIZATION: Check cache first to avoid unnecessary API calls
         if tool_name == "slack_list_channels":
             cached_result = self._get_cached_channels_response()
             if cached_result is not None:
@@ -1252,6 +1342,26 @@ Remember: Slack is the nervous system of distributed teams. Every message you cr
                     print(f"\n[SLACK AGENT] Using cached channels instead of API call")
                 self.stats.record_operation(tool_name, True, 0)
                 return cached_result, None
+
+        # OPTIMIZATION: Cache-first for slack_list_users
+        if tool_name == "slack_list_users":
+            cached_result = self._get_cached_users_response()
+            if cached_result is not None:
+                if self.verbose:
+                    print(f"\n[SLACK AGENT] Using cached users instead of API call")
+                self.stats.record_operation(tool_name, True, 0)
+                return cached_result, None
+
+        # OPTIMIZATION: Cache-first for slack_get_channel_info
+        if tool_name == "slack_get_channel_info":
+            channel_name = tool_args.get('channel', '') or tool_args.get('channel_id', '')
+            if channel_name:
+                cached_result = self._get_cached_channel_info_response(channel_name)
+                if cached_result is not None:
+                    if self.verbose:
+                        print(f"\n[SLACK AGENT] Using cached channel info for {channel_name} instead of API call")
+                    self.stats.record_operation(tool_name, True, 0)
+                    return cached_result, None
 
         while retry_count <= RetryConfig.MAX_RETRIES:
             try:

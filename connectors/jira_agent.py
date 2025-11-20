@@ -614,7 +614,7 @@ Remember: You're not just executing commands—you're helping users manage their
         """
         Prefetch and cache Jira metadata for faster operations (Feature #1)
 
-        This method fetches project metadata, issue types, fields, etc. at
+        This method fetches project metadata, issue types, fields, transitions, etc. at
         initialization time to avoid discovery overhead on every operation.
 
         The cache is persisted to the knowledge base with a 1-hour TTL.
@@ -626,6 +626,13 @@ Remember: You're not just executing commands—you're helping users manage their
                 self.metadata_cache = cached
                 if self.verbose:
                     print(f"[JIRA AGENT] Loaded metadata from cache ({len(cached.get('projects', {}))} projects)")
+
+                # Also load transitions cache if available
+                transitions_cache = self.knowledge.get_metadata_cache('jira', sub_key='transitions')
+                if transitions_cache:
+                    self.metadata_cache['transitions'] = transitions_cache
+                    if self.verbose:
+                        print(f"[JIRA AGENT] Loaded transitions cache ({len(transitions_cache)} projects)")
                 return
 
             if self.verbose:
@@ -633,12 +640,17 @@ Remember: You're not just executing commands—you're helping users manage their
 
             # Fetch all projects
             projects = await self._fetch_all_projects()
+            transitions = {}
 
             # Fetch issue types and fields for each project
             for project_key in list(projects.keys())[:10]:  # Limit to 10 projects for speed
                 try:
                     projects[project_key]['issue_types'] = await self._fetch_project_issue_types(project_key)
                     projects[project_key]['fields'] = await self._fetch_project_fields(project_key)
+                    # Fetch transitions for the project
+                    project_transitions = await self._fetch_project_transitions(project_key)
+                    if project_transitions:
+                        transitions[project_key] = project_transitions
                 except Exception as e:
                     if self.verbose:
                         print(f"[JIRA AGENT] Warning: Could not fetch metadata for {project_key}: {e}")
@@ -646,20 +658,163 @@ Remember: You're not just executing commands—you're helping users manage their
             # Store in cache
             self.metadata_cache = {
                 'projects': projects,
+                'transitions': transitions,
+                'recent_issues': {},  # Will be populated on demand
                 'fetched_at': asyncio.get_event_loop().time()
             }
 
             # Persist to knowledge base
             self.knowledge.save_metadata_cache('jira', self.metadata_cache, ttl_seconds=3600)
 
+            # Also save transitions separately with 1-hour TTL (rarely change)
+            if transitions:
+                self.knowledge.save_metadata_cache('jira', transitions, ttl_seconds=3600, sub_key='transitions')
+
             if self.verbose:
-                print(f"[JIRA AGENT] Cached metadata for {len(projects)} projects")
+                print(f"[JIRA AGENT] Cached metadata for {len(projects)} projects, {len(transitions)} transition sets")
 
         except Exception as e:
             # Graceful degradation: If prefetch fails, continue without cache
             if self.verbose:
                 print(f"[JIRA AGENT] Warning: Metadata prefetch failed: {e}")
             print(f"[JIRA AGENT] Continuing without metadata cache (operations may be slower)")
+
+    async def _fetch_project_transitions(self, project_key: str) -> List[Dict]:
+        """
+        Fetch available transitions for a project.
+
+        This caches workflow transitions to avoid fetching them for every status change.
+        """
+        try:
+            # Get a sample issue from the project to fetch its transitions
+            result = await self.session.call_tool("jira_search", {
+                "jql": f"project = {project_key} ORDER BY created DESC",
+                "maxResults": 1
+            })
+
+            if hasattr(result, 'content') and result.content:
+                content = result.content[0].text if result.content else "[]"
+                data = json.loads(content) if isinstance(content, str) else content
+
+                if isinstance(data, dict) and 'issues' in data and data['issues']:
+                    issue_key = data['issues'][0].get('key', '')
+                    if issue_key:
+                        # Fetch transitions for this issue
+                        trans_result = await self.session.call_tool("jira_get_transitions", {
+                            "issueIdOrKey": issue_key
+                        })
+                        if hasattr(trans_result, 'content') and trans_result.content:
+                            trans_content = trans_result.content[0].text if trans_result.content else "[]"
+                            trans_data = json.loads(trans_content) if isinstance(trans_content, str) else trans_content
+
+                            if isinstance(trans_data, dict) and 'transitions' in trans_data:
+                                return [
+                                    {'id': t.get('id', ''), 'name': t.get('name', ''), 'to': t.get('to', {}).get('name', '')}
+                                    for t in trans_data['transitions']
+                                ]
+                            elif isinstance(trans_data, list):
+                                return [
+                                    {'id': t.get('id', ''), 'name': t.get('name', ''), 'to': t.get('to', {}).get('name', '')}
+                                    for t in trans_data
+                                ]
+            return []
+        except Exception as e:
+            if self.verbose:
+                print(f"[JIRA AGENT] Could not fetch transitions for {project_key}: {e}")
+            return []
+
+    def get_cached_transitions(self, project_key: str) -> List[Dict]:
+        """
+        Get cached transitions for a project.
+
+        Args:
+            project_key: The Jira project key
+
+        Returns:
+            List of transition dicts with id, name, and target status
+        """
+        return self.metadata_cache.get('transitions', {}).get(project_key, [])
+
+    async def cache_recent_issues(self, project_key: str, issues: List[Dict]):
+        """
+        Cache recent issues for a project (15-minute TTL).
+
+        Args:
+            project_key: The Jira project key
+            issues: List of recent issues to cache
+        """
+        # Limit to 50 issues
+        limited_issues = issues[:50]
+
+        if 'recent_issues' not in self.metadata_cache:
+            self.metadata_cache['recent_issues'] = {}
+
+        self.metadata_cache['recent_issues'][project_key] = {
+            'issues': limited_issues,
+            'cached_at': asyncio.get_event_loop().time()
+        }
+
+        # Save with short TTL (15 minutes)
+        self.knowledge.save_metadata_cache(
+            'jira',
+            {project_key: limited_issues},
+            ttl_seconds=900,  # 15 minutes
+            sub_key=f'recent_issues_{project_key}'
+        )
+
+        if self.verbose:
+            print(f"[JIRA AGENT] Cached {len(limited_issues)} recent issues for {project_key}")
+
+    def get_cached_recent_issues(self, project_key: str) -> List[Dict]:
+        """
+        Get cached recent issues for a project.
+
+        Args:
+            project_key: The Jira project key
+
+        Returns:
+            List of recent issues or empty list if not cached
+        """
+        # Check memory cache first
+        if 'recent_issues' in self.metadata_cache:
+            cached = self.metadata_cache['recent_issues'].get(project_key, {})
+            if cached:
+                # Check if still valid (15 minutes)
+                cached_at = cached.get('cached_at', 0)
+                if asyncio.get_event_loop().time() - cached_at < 900:
+                    return cached.get('issues', [])
+
+        # Try knowledge base cache
+        cached = self.knowledge.get_metadata_cache('jira', sub_key=f'recent_issues_{project_key}')
+        if cached and project_key in cached:
+            return cached[project_key]
+
+        return []
+
+    def _invalidate_cache_after_write(self, operation_type: str, project_key: str = None):
+        """
+        Invalidate relevant cache entries after write operations.
+
+        Args:
+            operation_type: Type of operation (create, update, delete, transition)
+            project_key: Optional project key for targeted invalidation
+        """
+        if project_key:
+            # Invalidate recent issues cache for this project
+            self.knowledge.invalidate_metadata_cache('jira', sub_key=f'recent_issues_{project_key}')
+            if 'recent_issues' in self.metadata_cache and project_key in self.metadata_cache['recent_issues']:
+                del self.metadata_cache['recent_issues'][project_key]
+
+            if self.verbose:
+                print(f"[JIRA AGENT] Invalidated recent issues cache for {project_key} after {operation_type}")
+        else:
+            # Invalidate all recent issues caches
+            for key in list(self.metadata_cache.get('recent_issues', {}).keys()):
+                self.knowledge.invalidate_metadata_cache('jira', sub_key=f'recent_issues_{key}')
+            self.metadata_cache['recent_issues'] = {}
+
+            if self.verbose:
+                print(f"[JIRA AGENT] Invalidated all recent issues caches after {operation_type}")
 
     async def _fetch_all_projects(self) -> Dict:
         """Fetch all accessible projects"""

@@ -25,7 +25,8 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+import zoneinfo
 
 import google.generativeai as genai
 import google.generativeai.protos as protos
@@ -909,37 +910,183 @@ Remember: Calendar management is about respecting time - the most finite resourc
         to avoid discovery overhead on every operation.
 
         Cache is persisted to knowledge base with a 30-minute TTL.
+        Also caches current time context and free/busy information.
         """
         try:
+            # Always update current time context (this is cheap)
+            time_context = self._get_current_time_context()
+
             # Check if we have valid cached metadata
             cached = self.knowledge.get_metadata_cache('google_calendar')
             if cached:
                 self.metadata_cache = cached
+                # Update time context in memory
+                self.metadata_cache['time_context'] = time_context
                 if self.verbose:
                     print(f"[GOOGLE CALENDAR AGENT] Loaded metadata from cache")
+
+                # Check for free/busy cache
+                free_busy_cache = self.knowledge.get_metadata_cache('google_calendar', sub_key='free_busy')
+                if free_busy_cache:
+                    self.metadata_cache['free_busy'] = free_busy_cache
+                    if self.verbose:
+                        print(f"[GOOGLE CALENDAR AGENT] Loaded free/busy cache")
                 return
 
             if self.verbose:
                 print(f"[GOOGLE CALENDAR AGENT] Prefetching metadata...")
 
-            # Store in cache (even if empty - next time we'll try MCP tools)
+            # Store in cache with current time context
             self.metadata_cache = {
                 'fetched_at': asyncio.get_event_loop().time(),
                 'calendars': [],
-                'upcoming_events_count': 0
+                'upcoming_events_count': 0,
+                'time_context': time_context,
+                'free_busy': {}  # Will be populated on demand
             }
 
             # Persist to knowledge base with 30-minute TTL
             self.knowledge.save_metadata_cache('google_calendar', self.metadata_cache, ttl_seconds=1800)
 
             if self.verbose:
-                print(f"[GOOGLE CALENDAR AGENT] Metadata cache initialized")
+                print(f"[GOOGLE CALENDAR AGENT] Metadata cache initialized with time context: {time_context['timezone']}")
 
         except Exception as e:
             # Graceful degradation: If prefetch fails, continue without cache
             if self.verbose:
                 print(f"[GOOGLE CALENDAR AGENT] Warning: Metadata prefetch failed: {e}")
             print(f"[GOOGLE CALENDAR AGENT] Continuing without metadata cache")
+
+    def _get_current_time_context(self) -> Dict:
+        """
+        Get current time, date, and timezone information.
+
+        Returns a dict with:
+        - current_time: ISO format datetime
+        - current_date: YYYY-MM-DD format
+        - timezone: System timezone name
+        - timezone_offset: UTC offset string
+        - day_of_week: Full day name
+        """
+        # Try to get system timezone
+        try:
+            # Try to get from TZ environment variable or default
+            tz_name = os.environ.get('TZ', 'UTC')
+            if tz_name == 'UTC':
+                # Try to detect system timezone on Linux
+                if os.path.exists('/etc/timezone'):
+                    with open('/etc/timezone', 'r') as f:
+                        tz_name = f.read().strip()
+                elif os.path.exists('/etc/localtime'):
+                    import subprocess
+                    try:
+                        result = subprocess.run(['readlink', '-f', '/etc/localtime'],
+                                              capture_output=True, text=True)
+                        if result.returncode == 0:
+                            path = result.stdout.strip()
+                            if 'zoneinfo/' in path:
+                                tz_name = path.split('zoneinfo/')[-1]
+                    except:
+                        pass
+
+            tz = zoneinfo.ZoneInfo(tz_name)
+        except:
+            tz = timezone.utc
+            tz_name = 'UTC'
+
+        now = datetime.now(tz)
+
+        # Calculate UTC offset
+        offset = now.utcoffset()
+        if offset:
+            total_seconds = int(offset.total_seconds())
+            hours, remainder = divmod(abs(total_seconds), 3600)
+            minutes = remainder // 60
+            sign = '+' if total_seconds >= 0 else '-'
+            offset_str = f"UTC{sign}{hours:02d}:{minutes:02d}"
+        else:
+            offset_str = "UTC+00:00"
+
+        return {
+            'current_time': now.isoformat(),
+            'current_date': now.strftime('%Y-%m-%d'),
+            'timezone': tz_name,
+            'timezone_offset': offset_str,
+            'day_of_week': now.strftime('%A'),
+            'formatted_time': now.strftime('%I:%M %p'),
+            'formatted_date': now.strftime('%B %d, %Y')
+        }
+
+    async def cache_free_busy(self, free_busy_data: Dict, days: int = 7):
+        """
+        Cache free/busy information for faster scheduling.
+
+        Args:
+            free_busy_data: Dict with calendars and their busy slots
+            days: Number of days of data cached (default 7)
+        """
+        cache_entry = {
+            'data': free_busy_data,
+            'days': days,
+            'cached_at': asyncio.get_event_loop().time()
+        }
+
+        self.metadata_cache['free_busy'] = cache_entry
+
+        # Save with 15-minute TTL (free/busy changes frequently)
+        self.knowledge.save_metadata_cache(
+            'google_calendar',
+            cache_entry,
+            ttl_seconds=900,  # 15 minutes
+            sub_key='free_busy'
+        )
+
+        if self.verbose:
+            print(f"[GOOGLE CALENDAR AGENT] Cached free/busy data for {days} days")
+
+    def get_cached_free_busy(self) -> Optional[Dict]:
+        """
+        Get cached free/busy information if still valid.
+
+        Returns:
+            Free/busy data dict or None if not cached/expired
+        """
+        # Check memory cache first
+        cached = self.metadata_cache.get('free_busy', {})
+        if cached:
+            cached_at = cached.get('cached_at', 0)
+            # Check if still valid (15 minutes)
+            if asyncio.get_event_loop().time() - cached_at < 900:
+                return cached.get('data')
+
+        # Try knowledge base cache
+        return self.knowledge.get_metadata_cache('google_calendar', sub_key='free_busy')
+
+    def get_time_context(self) -> Dict:
+        """
+        Get current time context.
+
+        Returns:
+            Dict with current time, date, timezone information
+        """
+        # Always return fresh time context
+        return self._get_current_time_context()
+
+    def _invalidate_cache_after_write(self, operation_type: str):
+        """
+        Invalidate relevant cache entries after write operations.
+
+        Args:
+            operation_type: Type of operation (create_event, update_event, delete_event)
+        """
+        # Invalidate free/busy cache since schedule has changed
+        if operation_type in ['create_event', 'update_event', 'delete_event']:
+            self.knowledge.invalidate_metadata_cache('google_calendar', sub_key='free_busy')
+            if 'free_busy' in self.metadata_cache:
+                del self.metadata_cache['free_busy']
+
+            if self.verbose:
+                print(f"[GOOGLE CALENDAR AGENT] Invalidated free/busy cache after {operation_type}")
 
     # ========================================================================
     # CORE EXECUTION ENGINE

@@ -1077,6 +1077,20 @@ Remember: GitHub is where the world builds software. Every issue you create, eve
                 print(f"[GITHUB AGENT] Warning: Metadata prefetch failed: {e}")
             print(f"[GITHUB AGENT] Continuing without metadata cache (operations may be slower)")
 
+    def _invalidate_cache_after_write(self, operation_type: str, repo_name: str = None):
+        """
+        Invalidate relevant cache entries after write operations.
+
+        Args:
+            operation_type: Type of operation (create_issue, create_pr, merge_pr, etc.)
+            repo_name: Optional repo name for targeted invalidation
+        """
+        # Invalidate for repository-modifying operations
+        if operation_type in ['create_repo', 'delete_repo', 'fork_repo']:
+            self.knowledge.invalidate_metadata_cache('github')
+            if self.verbose:
+                print(f"[GITHUB AGENT] Invalidated repositories cache after {operation_type}")
+
     async def _fetch_accessible_repos(self) -> Dict:
         """Fetch accessible repositories"""
         try:

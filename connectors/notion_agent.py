@@ -829,6 +829,20 @@ Remember: You're not just executing commands—you're helping users build a powe
                 print(f"[NOTION AGENT] Could not fetch databases: {e}")
             return {}
 
+    def _invalidate_cache_after_write(self, operation_type: str, database_id: str = None):
+        """
+        Invalidate relevant cache entries after write operations.
+
+        Args:
+            operation_type: Type of operation (create_database, create_page, etc.)
+            database_id: Optional database ID for targeted invalidation
+        """
+        # Invalidate for database-modifying operations
+        if operation_type in ['create_database', 'delete_database', 'update_database']:
+            self.knowledge.invalidate_metadata_cache('notion')
+            if self.verbose:
+                print(f"[NOTION AGENT] Invalidated databases cache after {operation_type}")
+
     # ========================================================================
     # CORE EXECUTION ENGINE
     # ========================================================================

@@ -19,6 +19,86 @@ import json
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field
 from datetime import datetime
+from collections import OrderedDict
+
+
+# ============================================================================
+# CACHE METRICS
+# ============================================================================
+
+class CacheMetrics:
+    """
+    Track cache hit/miss statistics for performance optimization.
+
+    Logs metrics to intelligence logs for analysis.
+    """
+
+    def __init__(self):
+        self.hits: Dict[str, int] = {}
+        self.misses: Dict[str, int] = {}
+        self.evictions: Dict[str, int] = {}
+        self.invalidations: Dict[str, int] = {}
+
+    def record_hit(self, agent_name: str):
+        """Record a cache hit"""
+        self.hits[agent_name] = self.hits.get(agent_name, 0) + 1
+
+    def record_miss(self, agent_name: str):
+        """Record a cache miss"""
+        self.misses[agent_name] = self.misses.get(agent_name, 0) + 1
+
+    def record_eviction(self, agent_name: str):
+        """Record a cache eviction"""
+        self.evictions[agent_name] = self.evictions.get(agent_name, 0) + 1
+
+    def record_invalidation(self, agent_name: str):
+        """Record a cache invalidation"""
+        self.invalidations[agent_name] = self.invalidations.get(agent_name, 0) + 1
+
+    def get_hit_rate(self, agent_name: str) -> float:
+        """Get cache hit rate for an agent"""
+        hits = self.hits.get(agent_name, 0)
+        misses = self.misses.get(agent_name, 0)
+        total = hits + misses
+        return (hits / total * 100) if total > 0 else 0.0
+
+    def get_stats(self, agent_name: str = None) -> Dict:
+        """Get cache statistics"""
+        if agent_name:
+            return {
+                'hits': self.hits.get(agent_name, 0),
+                'misses': self.misses.get(agent_name, 0),
+                'evictions': self.evictions.get(agent_name, 0),
+                'invalidations': self.invalidations.get(agent_name, 0),
+                'hit_rate': f"{self.get_hit_rate(agent_name):.1f}%"
+            }
+        return {
+            'hits': self.hits,
+            'misses': self.misses,
+            'evictions': self.evictions,
+            'invalidations': self.invalidations
+        }
+
+    def to_dict(self) -> Dict:
+        """Convert metrics to dict for logging"""
+        return {
+            'hits': dict(self.hits),
+            'misses': dict(self.misses),
+            'evictions': dict(self.evictions),
+            'invalidations': dict(self.invalidations),
+            'hit_rates': {
+                agent: f"{self.get_hit_rate(agent):.1f}%"
+                for agent in set(list(self.hits.keys()) + list(self.misses.keys()))
+            }
+        }
+
+
+# Global cache metrics instance
+_cache_metrics = CacheMetrics()
+
+def get_cache_metrics() -> CacheMetrics:
+    """Get the global cache metrics instance"""
+    return _cache_metrics
 
 
 # ============================================================================
@@ -137,17 +217,35 @@ class WorkspaceKnowledge:
     - "KAN project uses 'Task' not 'Bug'"
     - "Security issues always assigned to @security-team"
     - "Critical bugs get #critical-bugs notification"
+
+    Features LRU eviction and cache metrics tracking.
     """
 
-    def __init__(self, knowledge_file: str = 'data/workspace_knowledge.json'):
+    # Default max entries per cache type for LRU eviction
+    DEFAULT_MAX_CACHE_ENTRIES = {
+        'jira': 100,
+        'slack': 200,
+        'github': 100,
+        'notion': 100,
+        'google_calendar': 50,
+        'browser': 20,
+        'scraper': 50,
+        'code_reviewer': 30,
+        'default': 50
+    }
+
+    def __init__(self, knowledge_file: str = 'data/workspace_knowledge.json', verbose: bool = False):
         """
         Initialize workspace knowledge
 
         Args:
             knowledge_file: Path to persistent knowledge file
+            verbose: Enable verbose logging
         """
         self.knowledge_file = knowledge_file
+        self.verbose = verbose
         self.data = self._load()
+        self.metrics = get_cache_metrics()
 
     def _load(self) -> Dict:
         """Load knowledge from disk"""
@@ -257,39 +355,93 @@ class WorkspaceKnowledge:
         """Get user preference"""
         return self.data['user_preferences'].get(key, default)
 
-    def save_metadata_cache(self, agent_name: str, metadata: Dict, ttl_seconds: int = 3600):
+    def save_metadata_cache(self, agent_name: str, metadata: Dict, ttl_seconds: int = 3600, sub_key: str = None):
         """
-        Save agent metadata cache with TTL (Feature #1)
+        Save agent metadata cache with TTL and LRU eviction (Feature #1)
 
         Args:
             agent_name: Name of the agent (e.g., 'jira', 'slack')
             metadata: Metadata dictionary to cache
             ttl_seconds: Time-to-live in seconds (default: 1 hour)
+            sub_key: Optional sub-key for partial caching (e.g., 'transitions', 'recent_issues')
         """
-        self.data['metadata_caches'][agent_name] = {
+        # Initialize agent cache if doesn't exist
+        if agent_name not in self.data['metadata_caches']:
+            self.data['metadata_caches'][agent_name] = {}
+
+        # Determine cache key
+        cache_key = sub_key if sub_key else '_main'
+
+        # Get max entries for this agent
+        max_entries = self.DEFAULT_MAX_CACHE_ENTRIES.get(
+            agent_name,
+            self.DEFAULT_MAX_CACHE_ENTRIES['default']
+        )
+
+        # Check if we need LRU eviction
+        agent_cache = self.data['metadata_caches'][agent_name]
+        if isinstance(agent_cache, dict) and len(agent_cache) >= max_entries:
+            # Evict oldest entry (by cached_at timestamp)
+            oldest_key = None
+            oldest_time = None
+            for key, value in agent_cache.items():
+                if isinstance(value, dict) and 'cached_at' in value:
+                    cached_time = value['cached_at']
+                    if oldest_time is None or cached_time < oldest_time:
+                        oldest_time = cached_time
+                        oldest_key = key
+
+            if oldest_key:
+                del agent_cache[oldest_key]
+                self.metrics.record_eviction(agent_name)
+                if self.verbose:
+                    print(f"[KNOWLEDGE] LRU eviction: removed {oldest_key} from {agent_name} cache")
+
+        # Store the cache entry
+        self.data['metadata_caches'][agent_name][cache_key] = {
             'data': metadata,
             'cached_at': datetime.now().isoformat(),
             'ttl_seconds': ttl_seconds
         }
         self._save()
 
-        if hasattr(self, 'verbose') and self.verbose:
-            print(f"[KNOWLEDGE] Cached metadata for {agent_name} (TTL: {ttl_seconds}s)")
+        if self.verbose:
+            print(f"[KNOWLEDGE] Cached metadata for {agent_name}/{cache_key} (TTL: {ttl_seconds}s)")
 
-    def get_metadata_cache(self, agent_name: str) -> Optional[Dict]:
+    def get_metadata_cache(self, agent_name: str, sub_key: str = None) -> Optional[Dict]:
         """
         Get cached metadata for an agent if still valid (Feature #1)
 
         Args:
             agent_name: Name of the agent
+            sub_key: Optional sub-key for partial cache retrieval
 
         Returns:
             Cached metadata dict, or None if expired/not found
         """
         if agent_name not in self.data['metadata_caches']:
+            self.metrics.record_miss(agent_name)
             return None
 
-        cache_entry = self.data['metadata_caches'][agent_name]
+        agent_cache = self.data['metadata_caches'][agent_name]
+
+        # Handle legacy format (direct data storage)
+        if 'data' in agent_cache and 'cached_at' in agent_cache:
+            # Old format - convert to new format
+            cache_entry = agent_cache
+        else:
+            # New format with sub-keys
+            cache_key = sub_key if sub_key else '_main'
+            if cache_key not in agent_cache:
+                self.metrics.record_miss(agent_name)
+                return None
+            cache_entry = agent_cache[cache_key]
+
+        # Validate cache entry structure
+        if not isinstance(cache_entry, dict) or 'cached_at' not in cache_entry:
+            self.metrics.record_miss(agent_name)
+            return None
+
         cached_at = datetime.fromisoformat(cache_entry['cached_at'])
         ttl = cache_entry.get('ttl_seconds', 3600)
 
@@ -297,22 +449,54 @@ class WorkspaceKnowledge:
         age_seconds = (datetime.now() - cached_at).total_seconds()
         if age_seconds > ttl:
             # Cache expired
-            if hasattr(self, 'verbose') and self.verbose:
+            self.metrics.record_miss(agent_name)
+            if self.verbose:
                 print(f"[KNOWLEDGE] Metadata cache for {agent_name} expired (age: {age_seconds:.0f}s)")
             return None
 
+        # Cache hit!
+        self.metrics.record_hit(agent_name)
         return cache_entry['data']
 
-    def invalidate_metadata_cache(self, agent_name: str):
+    def invalidate_metadata_cache(self, agent_name: str, sub_key: str = None):
         """
         Invalidate (delete) cached metadata for an agent
 
         Args:
             agent_name: Name of the agent
+            sub_key: Optional sub-key to invalidate only a portion of cache
         """
-        if agent_name in self.data['metadata_caches']:
+        if agent_name not in self.data['metadata_caches']:
+            return
+
+        if sub_key:
+            # Partial invalidation
+            agent_cache = self.data['metadata_caches'][agent_name]
+            if isinstance(agent_cache, dict) and sub_key in agent_cache:
+                del agent_cache[sub_key]
+                self.metrics.record_invalidation(agent_name)
+                if self.verbose:
+                    print(f"[KNOWLEDGE] Invalidated {agent_name}/{sub_key} cache")
+        else:
+            # Full invalidation
             del self.data['metadata_caches'][agent_name]
-            self._save()
+            self.metrics.record_invalidation(agent_name)
+            if self.verbose:
+                print(f"[KNOWLEDGE] Invalidated all {agent_name} cache")
+
+        self._save()
+
+    def get_cache_stats(self, agent_name: str = None) -> Dict:
+        """
+        Get cache statistics for monitoring
+
+        Args:
+            agent_name: Optional agent name to filter stats
+
+        Returns:
+            Dict with cache statistics
+        """
+        return self.metrics.get_stats(agent_name)
 
 
 # ============================================================================

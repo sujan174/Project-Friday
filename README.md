@@ -438,13 +438,39 @@ Prevents cascading failures:
 
 ### Metadata Caching
 
-Agents cache workspace metadata to reduce API calls:
+Agents cache workspace metadata to reduce API calls with advanced features:
 
-- **Slack**: Channels, users (1-hour TTL)
-- **Jira**: Projects, issue types (1-hour TTL)
-- **GitHub**: Repositories (1-hour TTL)
-- **Notion**: Databases (1-hour TTL)
-- **Calendar**: Calendars (30-minute TTL)
+#### Cache Configuration by Agent
+
+| Agent | Cache Contents | TTL |
+|-------|---------------|-----|
+| **Slack** | Channels, users, channel info | 1 hour |
+| **Jira** | Projects, issue types, transitions | 1 hour |
+| **Jira** | Recent issues (per project) | 15 minutes |
+| **GitHub** | Repositories, labels | 1 hour |
+| **Notion** | Databases | 1 hour |
+| **Calendar** | Calendars, time context | 30 minutes |
+| **Calendar** | Free/busy availability | 15 minutes |
+
+#### Cache Features
+
+- **LRU Eviction**: Automatic eviction of oldest entries when max capacity reached
+- **Cache-First Optimization**: Slack operations skip API calls for cached data
+- **Hit/Miss Metrics**: Track cache performance per agent
+- **Conditional Invalidation**: Auto-invalidate on write operations
+- **Cache Warming**: Prefetch metadata on agent initialization
+
+#### Cache Metrics
+
+The system tracks cache hit/miss ratios for optimization:
+
+```python
+from connectors.agent_intelligence import get_cache_metrics
+
+# Get cache statistics
+metrics = get_cache_metrics()
+print(metrics.get_stats('slack'))  # {'hits': 45, 'misses': 5, 'hit_rate': '90.0%'}
+```
 
 ---
 
