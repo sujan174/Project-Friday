@@ -1088,6 +1088,45 @@ Remember: Calendar management is about respecting time - the most finite resourc
             if self.verbose:
                 print(f"[GOOGLE CALENDAR AGENT] Invalidated free/busy cache after {operation_type}")
 
+    def _inject_calendar_context(self, instruction: str) -> str:
+        """
+        Inject calendar time context and available calendars into the instruction.
+
+        This optimization provides the LLM with current time/date information
+        and available calendars, enabling better scheduling decisions.
+
+        Args:
+            instruction: Original instruction from user
+
+        Returns:
+            Instruction with injected calendar context
+        """
+        context_parts = []
+
+        # Add time context (very useful for calendar operations)
+        time_context = self.metadata_cache.get('time_context', {})
+        if time_context:
+            context_parts.append(
+                f"Current Time: {time_context.get('formatted_time', 'Unknown')} on "
+                f"{time_context.get('day_of_week', 'Unknown')}, "
+                f"{time_context.get('formatted_date', 'Unknown')} "
+                f"({time_context.get('timezone', 'Unknown')})"
+            )
+
+        # Add calendars if available
+        calendars = self.metadata_cache.get('calendars', [])
+        if calendars:
+            cal_names = [cal.get('summary', 'Untitled') for cal in calendars[:5]]
+            context_parts.append(f"Available Calendars: {', '.join(cal_names)}")
+
+        if not context_parts:
+            return instruction
+
+        # Inject calendar context into instruction
+        context = "\n\n[" + " | ".join(context_parts) + "]"
+
+        return instruction + context
+
     # ========================================================================
     # CORE EXECUTION ENGINE
     # ========================================================================
@@ -1109,10 +1148,20 @@ Remember: Calendar management is about respecting time - the most finite resourc
             if context_from_other_agents and self.verbose:
                 print(f"[GOOGLE CALENDAR AGENT] Found context from other agents")
 
-            # Use resolved instruction
-            instruction = resolved_instruction
+            # Step 3: OPTIMIZATION - Inject calendar context (time, calendars)
+            # This provides current time context for scheduling operations
+            resolved_instruction = self._inject_calendar_context(resolved_instruction)
+
+            if self.verbose:
+                print(f"[GOOGLE CALENDAR AGENT] Injected calendar context into instruction")
+
+            # Enhance instruction with cross-agent context if available
+            if context_from_other_agents:
+                resolved_instruction += f"\n\n[Additional context from other agents: {context_from_other_agents}]"
+
+            # Step 4: Start conversation with LLM
             chat = self.model.start_chat()
-            response = await chat.send_message_async(instruction)
+            response = await chat.send_message_async(resolved_instruction)
 
             # Handle function calling loop with retry logic
             max_iterations = 15
