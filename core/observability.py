@@ -137,16 +137,16 @@ class ObservabilitySystem:
         if enable_metrics:
             self._init_metrics()
 
-        # Create specialized loggers
+        # Create specialized loggers (without export directories to avoid folder clutter)
         self.orchestration_logger = OrchestrationLogger(
             session_id=session_id,
-            export_dir=str(self.log_dir / "orchestration"),
+            export_dir=None,  # Disabled - using SimpleSessionLogger instead
             verbose=verbose
         )
 
         self.intelligence_logger = IntelligenceLogger(
             session_id=session_id,
-            export_dir=str(self.log_dir / "intelligence"),
+            export_dir=None,  # Disabled - using SimpleSessionLogger instead
             verbose=verbose
         )
 
@@ -162,8 +162,8 @@ class ObservabilitySystem:
         configure_logging({
             'log_level': log_level,
             'log_dir': str(self.log_dir),
-            'enable_file_logging': True,
-            'enable_json_logging': True,
+            'enable_file_logging': False,  # Disabled - using SimpleSessionLogger instead
+            'enable_json_logging': False,  # Disabled - using SimpleSessionLogger instead
             'enable_console': True,
             'enable_colors': True,
             'max_file_size_mb': 10,
@@ -172,18 +172,18 @@ class ObservabilitySystem:
 
     def _init_tracing(self):
         """Initialize distributed tracing"""
-        trace_dir = self.log_dir / "traces"
+        # Disabled export directory to avoid folder clutter
         initialize_global_tracer(
             service_name=self.service_name,
-            export_dir=str(trace_dir)
+            export_dir=None  # Disabled - using SimpleSessionLogger instead
         )
 
     def _init_metrics(self):
         """Initialize metrics collection"""
-        metrics_dir = self.log_dir / "metrics"
+        # Disabled export directory to avoid folder clutter
         initialize_global_metrics(
             retention_window_seconds=3600,
-            export_dir=str(metrics_dir),
+            export_dir=None,  # Disabled - using SimpleSessionLogger instead
             verbose=self.verbose
         )
 
@@ -191,25 +191,19 @@ class ObservabilitySystem:
         """Export all observability data"""
         results = {}
 
-        # Export orchestration summary
+        # Export orchestration summary (in-memory only since export_dir is disabled)
         try:
             results['orchestration'] = self.orchestration_logger.export_session_summary()
         except Exception as e:
             self.logger.error(f"Failed to export orchestration data: {e}")
 
-        # Export intelligence summary
+        # Export intelligence summary (in-memory only since export_dir is disabled)
         try:
             results['intelligence'] = self.intelligence_logger.export_session_summary()
         except Exception as e:
             self.logger.error(f"Failed to export intelligence data: {e}")
 
-        # Export metrics
-        try:
-            metrics = get_global_metrics()
-            metrics_path = self.log_dir / "metrics" / f"metrics_{self.session_id}.json"
-            results['metrics'] = metrics.export_json(str(metrics_path))
-        except Exception as e:
-            self.logger.error(f"Failed to export metrics: {e}")
+        # Metrics export disabled - using SimpleSessionLogger instead
 
         return results
 

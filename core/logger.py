@@ -42,11 +42,14 @@ try:
     configure_logging({
         'log_level': getattr(Config, 'LOG_LEVEL', 'INFO'),
         'log_dir': getattr(Config, 'LOG_DIR', 'logs'),
-        'enable_file_logging': getattr(Config, 'ENABLE_FILE_LOGGING', True),
-        'enable_json_logging': getattr(Config, 'ENABLE_JSON_LOGGING', True),
+        'enable_file_logging': False,  # Disabled - using SimpleSessionLogger instead
+        'enable_json_logging': False,  # Disabled - using SimpleSessionLogger instead
         'enable_console': getattr(Config, 'ENABLE_CONSOLE_LOGGING', True),
         'enable_colors': getattr(Config, 'ENABLE_COLORED_LOGS', True),
     })
 except ImportError:
-    # Config not available, use defaults
-    configure_logging()
+    # Config not available, use defaults with file logging disabled
+    configure_logging({
+        'enable_file_logging': False,
+        'enable_json_logging': False
+    })

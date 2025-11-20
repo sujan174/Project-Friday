@@ -1644,17 +1644,11 @@ Provide a clear instruction describing what you want to accomplish.""",
             try:
                 self.analytics.end_session()
 
-                # Save analytics
-                analytics_dir = Path("logs/analytics")
-                analytics_dir.mkdir(parents=True, exist_ok=True)
-                analytics_file = analytics_dir / f"{self.session_id}.json"
-                self.analytics.save_to_file(str(analytics_file))
-
+                # Display analytics summary (no separate folder - using session logging)
                 if self.verbose:
-                    print(f"{C.GREEN}  ✓ Analytics saved: {analytics_file}{C.ENDC}")
                     print(f"{C.CYAN}    {self.analytics.generate_summary_report()}{C.ENDC}")
             except Exception as e:
-                logger.warning(f"Failed to save analytics: {e}")
+                logger.warning(f"Failed to process analytics: {e}")
 
         # Save user preferences
         if hasattr(self, 'user_prefs') and hasattr(self, 'prefs_file'):

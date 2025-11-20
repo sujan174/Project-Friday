@@ -254,9 +254,10 @@ class EnhancedLogger:
             if config:
                 cls._config.update(config)
 
-            # Create log directory
-            log_dir = Path(cls._config['log_dir'])
-            log_dir.mkdir(exist_ok=True)
+            # Create log directory only if file logging is enabled
+            if cls._config['enable_file_logging'] or cls._config['enable_json_logging']:
+                log_dir = Path(cls._config['log_dir'])
+                log_dir.mkdir(exist_ok=True)
 
             cls._initialized = True
 
