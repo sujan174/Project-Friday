@@ -423,6 +423,11 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
         """
         prompt = self._base_system_prompt
 
+        # Add explicit user instructions (highest priority)
+        explicit_instructions = self.user_prefs.get_instructions_for_prompt()
+        if explicit_instructions:
+            prompt += "\n\n" + explicit_instructions
+
         # Add user communication preferences
         comm_prefs = self.user_prefs.get_communication_preferences()
         if self.user_prefs.communication_style.confidence >= self.user_prefs.min_confidence_threshold:
@@ -459,6 +464,135 @@ Prefer using healthy agents when possible. If a user specifically requests an un
             prompt += health_section
 
         return prompt
+
+    # =========================================================================
+    # EXPLICIT INSTRUCTION DETECTION
+    # =========================================================================
+
+    def _detect_and_store_explicit_instruction(self, message: str) -> Optional[str]:
+        """
+        Detect and store explicit user instructions from a message.
+
+        Patterns detected:
+        - "from now on use X" / "from now on always X"
+        - "always X" / "never X"
+        - "remember that X" / "remember to X"
+        - "my X is Y" / "my timezone is EST"
+        - "default X is Y" / "set default X to Y"
+        - "use X for Y"
+
+        Args:
+            message: User message to analyze
+
+        Returns:
+            Confirmation message if instruction was stored, None otherwise
+        """
+        import re
+
+        message_lower = message.lower().strip()
+
+        # Define patterns and their extractors
+        patterns = [
+            # Timezone patterns
+            (r'(?:from now on\s+)?(?:use|set|switch to)\s+([A-Z]{2,4})\s*(?:time(?:zone)?)?',
+             'timezone', 'timezone'),
+            (r'my\s+timezone\s+is\s+([A-Z]{2,4})',
+             'timezone', 'timezone'),
+            (r'(?:from now on\s+)?(?:use|set)\s+([A-Z]{2,4})\s+(?:for\s+)?(?:all\s+)?times?',
+             'timezone', 'timezone'),
+
+            # Default project patterns
+            (r'(?:my\s+)?default\s+project\s+(?:is|should be)\s+([A-Z0-9_-]+)',
+             'default', 'default_project'),
+            (r'(?:from now on\s+)?use\s+([A-Z0-9_-]+)\s+(?:as\s+)?(?:the\s+)?default\s+project',
+             'default', 'default_project'),
+            (r'always\s+(?:use|create\s+(?:tickets?|issues?)\s+in)\s+([A-Z0-9_-]+)',
+             'default', 'default_project'),
+
+            # Default assignee patterns
+            (r'(?:always\s+)?assign\s+(?:tickets?|issues?|tasks?)?\s*to\s+([A-Za-z0-9_@.-]+)',
+             'default', 'default_assignee'),
+            (r'default\s+assignee\s+(?:is|should be)\s+([A-Za-z0-9_@.-]+)',
+             'default', 'default_assignee'),
+
+            # Notification channel patterns
+            (r'(?:send|post)\s+(?:all\s+)?notifications?\s+(?:to|in)\s+#?([A-Za-z0-9_-]+)',
+             'default', 'notification_channel'),
+            (r'default\s+(?:slack\s+)?channel\s+(?:is|should be)\s+#?([A-Za-z0-9_-]+)',
+             'default', 'default_channel'),
+
+            # Formatting preferences
+            (r'(?:always\s+)?(?:use|prefer)\s+(bullet\s*points?|numbered\s*lists?|markdown)',
+             'formatting', 'list_format'),
+            (r'(?:be\s+)?(?:more\s+)?(concise|verbose|detailed|brief)',
+             'formatting', 'verbosity'),
+
+            # Behavior patterns
+            (r'never\s+(.+?)(?:\s+unless|\s+except|\.|$)',
+             'behavior', 'never'),
+            (r'always\s+(.+?)(?:\s+when|\s+for|\.|$)',
+             'behavior', 'always'),
+
+            # Remember patterns (generic)
+            (r'remember\s+(?:that\s+)?(?:my\s+)?([a-z_]+)\s+is\s+([A-Za-z0-9_@.-]+)',
+             'preference', None),  # Special handling for key-value
+        ]
+
+        for pattern, category, key in patterns:
+            match = re.search(pattern, message, re.IGNORECASE)
+            if match:
+                # Extract value(s)
+                groups = match.groups()
+
+                if key is None and len(groups) >= 2:
+                    # Handle "remember that X is Y" pattern
+                    extracted_key = groups[0].strip().replace(' ', '_')
+                    value = groups[1].strip()
+                elif len(groups) >= 1:
+                    extracted_key = key
+                    value = groups[0].strip()
+                else:
+                    continue
+
+                # Clean up value
+                value = value.strip('.,;!?')
+
+                # Special handling for certain categories
+                if category == 'timezone':
+                    value = value.upper()
+                elif category == 'formatting' and extracted_key == 'verbosity':
+                    # Normalize verbosity values
+                    if value in ['concise', 'brief']:
+                        value = 'concise'
+                    elif value in ['verbose', 'detailed']:
+                        value = 'verbose'
+
+                # Store the instruction
+                was_new = self.user_prefs.add_explicit_instruction(
+                    instruction=message,
+                    category=category,
+                    key=extracted_key,
+                    value=value
+                )
+
+                # Save preferences to disk
+                try:
+                    self.user_prefs.save_to_file(str(self.prefs_file))
+                except Exception as e:
+                    logger.warning(f"Failed to save preferences: {e}")
+
+                # Generate confirmation
+                if was_new:
+                    confirmation = f"Got it! I'll remember that {extracted_key} = {value}."
+                else:
+                    confirmation = f"Updated: {extracted_key} is now {value}."
+
+                if self.verbose:
+                    print(f"{C.CYAN}📝 Stored instruction: {extracted_key} = {value} ({category}){C.ENDC}")
+
+                return confirmation
+
+        return None
 
     # =========================================================================
     # UNDO HANDLER REGISTRATION
@@ -1203,6 +1337,9 @@ Provide a clear instruction describing what you want to accomplish.""",
         # Learn communication style from user message
         self.user_prefs.record_interaction_style(user_message)
 
+        # Detect and store explicit instructions
+        instruction_confirmation = self._detect_and_store_explicit_instruction(user_message)
+
         # ===================================================================
 
         # Initialize on first message
@@ -1252,6 +1389,18 @@ Provide a clear instruction describing what you want to accomplish.""",
                 message_to_send += f"\n\n[User Preference: For {self._current_intent_type} tasks, this user typically prefers using the {preferred_agent} agent]"
                 if self.verbose:
                     print(f"{C.CYAN}📊 User prefers {preferred_agent} for {self._current_intent_type} tasks{C.ENDC}")
+
+        # Add explicit instructions to message for immediate application
+        # This ensures instructions apply to the current message even if stored mid-session
+        active_instructions = self.user_prefs.get_explicit_instructions()
+        if active_instructions:
+            instruction_hints = []
+            for inst in active_instructions:
+                instruction_hints.append(f"{inst.key}: {inst.value}")
+            if instruction_hints:
+                message_to_send += f"\n\n[User's Explicit Instructions: {'; '.join(instruction_hints)}]"
+                if self.verbose:
+                    print(f"{C.CYAN}📝 Applying {len(active_instructions)} explicit instruction(s){C.ENDC}")
 
         # Check confidence and handle accordingly
         action, explanation = intelligence['action_recommendation']
@@ -1518,14 +1667,13 @@ Provide a clear instruction describing what you want to accomplish.""",
                 print(f"{C.YELLOW}⚠ Could not update conversation history: {e}{C.ENDC}")
 
         # Extract text from final LLM response
+        final_response = None
         if llm_response and llm_response.text:
-            return self._log_and_return_response(llm_response.text)
-
-        # Fallback: Try to extract from raw response object
-        if response and hasattr(response, 'candidates') and response.candidates:
+            final_response = llm_response.text
+        elif response and hasattr(response, 'candidates') and response.candidates:
             try:
                 # Try to get text property (may fail if there are function_call parts)
-                return self._log_and_return_response(response.text)
+                final_response = response.text
             except Exception:
                 # Manual extraction from parts
                 text_parts = []
@@ -1534,10 +1682,17 @@ Provide a clear instruction describing what you want to accomplish.""",
                         text_parts.append(part.text)
 
                 if text_parts:
-                    return self._log_and_return_response('\n'.join(text_parts))
+                    final_response = '\n'.join(text_parts)
 
-        # If we still don't have text, return a generic message
-        return self._log_and_return_response("⚠️ Task completed but response formatting failed. The operations were executed successfully.")
+        # Default response if nothing found
+        if not final_response:
+            final_response = "Task completed but response formatting failed. The operations were executed successfully."
+
+        # Prepend instruction confirmation if we stored a new instruction
+        if instruction_confirmation:
+            final_response = f"{instruction_confirmation}\n\n{final_response}"
+
+        return self._log_and_return_response(final_response)
 
     def _should_retry_operation(self, error_str: str, operation_key: str) -> bool:
         """

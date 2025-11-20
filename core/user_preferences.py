@@ -20,6 +20,17 @@ from collections import Counter, defaultdict
 
 
 @dataclass
+class ExplicitInstruction:
+    """User's explicit instruction to remember"""
+    instruction: str  # Original instruction text
+    category: str  # timezone, default, behavior, formatting, preference
+    key: str  # Extracted key (e.g., "timezone", "default_project", "assignee")
+    value: str  # Extracted value (e.g., "EST", "KAN", "John")
+    created_at: float = field(default_factory=time.time)
+    is_active: bool = True
+
+
+@dataclass
 class AgentPreference:
     """User's preferred agent for a task type"""
     task_pattern: str  # e.g., "create ticket", "send message"
@@ -84,6 +95,9 @@ class UserPreferenceManager:
         self.agent_prefs: Dict[str, AgentPreference] = {}
         self.communication_style = CommunicationStyle()
         self.working_hours = WorkingHours()
+
+        # Explicit instructions (user-defined rules)
+        self.explicit_instructions: List[ExplicitInstruction] = []
 
         # Interaction history
         self.interaction_history: List[Dict[str, Any]] = []
@@ -258,6 +272,162 @@ class UserPreferenceManager:
         return self.working_hours.typical_start_hour <= hour <= self.working_hours.typical_end_hour
 
     # =========================================================================
+    # EXPLICIT INSTRUCTIONS
+    # =========================================================================
+
+    def add_explicit_instruction(
+        self,
+        instruction: str,
+        category: str,
+        key: str,
+        value: str
+    ) -> bool:
+        """
+        Add or update an explicit user instruction.
+
+        Args:
+            instruction: Original instruction text from user
+            category: Category (timezone, default, behavior, formatting, preference)
+            key: Extracted key (e.g., "timezone", "default_project")
+            value: Extracted value (e.g., "EST", "KAN")
+
+        Returns:
+            True if added, False if updated existing
+        """
+        # Check if we already have an instruction with this key
+        for existing in self.explicit_instructions:
+            if existing.key == key and existing.is_active:
+                # Update existing instruction
+                existing.value = value
+                existing.instruction = instruction
+                existing.created_at = time.time()
+                if self.verbose:
+                    print(f"[PREFS] Updated instruction: {key} = {value}")
+                return False
+
+        # Add new instruction
+        new_instruction = ExplicitInstruction(
+            instruction=instruction,
+            category=category,
+            key=key,
+            value=value
+        )
+        self.explicit_instructions.append(new_instruction)
+
+        if self.verbose:
+            print(f"[PREFS] Added instruction: {key} = {value} ({category})")
+
+        return True
+
+    def get_explicit_instructions(self, category: Optional[str] = None) -> List[ExplicitInstruction]:
+        """
+        Get all active explicit instructions.
+
+        Args:
+            category: Optional filter by category
+
+        Returns:
+            List of active instructions
+        """
+        instructions = [i for i in self.explicit_instructions if i.is_active]
+
+        if category:
+            instructions = [i for i in instructions if i.category == category]
+
+        return instructions
+
+    def get_instruction_value(self, key: str) -> Optional[str]:
+        """
+        Get the value for a specific instruction key.
+
+        Args:
+            key: The instruction key (e.g., "timezone", "default_project")
+
+        Returns:
+            The value if found, None otherwise
+        """
+        for instruction in self.explicit_instructions:
+            if instruction.key == key and instruction.is_active:
+                return instruction.value
+        return None
+
+    def remove_instruction(self, key: str) -> bool:
+        """
+        Remove (deactivate) an instruction by key.
+
+        Args:
+            key: The instruction key to remove
+
+        Returns:
+            True if removed, False if not found
+        """
+        for instruction in self.explicit_instructions:
+            if instruction.key == key and instruction.is_active:
+                instruction.is_active = False
+                if self.verbose:
+                    print(f"[PREFS] Removed instruction: {key}")
+                return True
+        return False
+
+    def clear_instructions(self, category: Optional[str] = None):
+        """
+        Clear all instructions or instructions in a category.
+
+        Args:
+            category: Optional category to clear, or None for all
+        """
+        for instruction in self.explicit_instructions:
+            if category is None or instruction.category == category:
+                instruction.is_active = False
+
+        if self.verbose:
+            if category:
+                print(f"[PREFS] Cleared all {category} instructions")
+            else:
+                print(f"[PREFS] Cleared all instructions")
+
+    def get_instructions_for_prompt(self) -> str:
+        """
+        Format active instructions for inclusion in system prompt.
+
+        Returns:
+            Formatted string of instructions, or empty string if none
+        """
+        active = self.get_explicit_instructions()
+
+        if not active:
+            return ""
+
+        # Group by category
+        by_category: Dict[str, List[ExplicitInstruction]] = defaultdict(list)
+        for inst in active:
+            by_category[inst.category].append(inst)
+
+        lines = ["# User's Explicit Instructions", ""]
+        lines.append("The user has specified the following preferences that MUST be followed:")
+        lines.append("")
+
+        # Format by category with clear grouping
+        category_labels = {
+            'timezone': 'Time & Timezone',
+            'default': 'Default Values',
+            'behavior': 'Behavior Rules',
+            'formatting': 'Formatting Preferences',
+            'preference': 'General Preferences'
+        }
+
+        for category, instructions in by_category.items():
+            label = category_labels.get(category, category.title())
+            lines.append(f"**{label}:**")
+            for inst in instructions:
+                lines.append(f"- {inst.key}: {inst.value}")
+            lines.append("")
+
+        lines.append("Always apply these instructions unless the user explicitly requests otherwise.")
+
+        return "\n".join(lines)
+
+    # =========================================================================
     # PERSISTENCE
     # =========================================================================
 
@@ -273,6 +443,9 @@ class UserPreferenceManager:
                 **asdict(self.working_hours),
                 'active_days': list(self.working_hours.active_days)  # Convert set to list
             },
+            'explicit_instructions': [
+                asdict(inst) for inst in self.explicit_instructions
+            ],
             'statistics': {
                 'total_interactions': self.total_interactions,
                 'auto_executions': self.auto_executions
@@ -310,6 +483,13 @@ class UserPreferenceManager:
             if 'active_days' in hours_data:
                 hours_data['active_days'] = set(hours_data['active_days'])
             self.working_hours = WorkingHours(**hours_data)
+
+            # Restore explicit instructions
+            instructions_data = data.get('explicit_instructions', [])
+            self.explicit_instructions = [
+                ExplicitInstruction(**inst_data)
+                for inst_data in instructions_data
+            ]
 
             # Restore statistics
             stats = data.get('statistics', {})
@@ -359,6 +539,14 @@ class UserPreferenceManager:
             days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
             active = ', '.join(days[d] for d in sorted(self.working_hours.active_days))
             lines.append(f"  • Active days: {active}")
+            lines.append("")
+
+        # Explicit instructions
+        active_instructions = self.get_explicit_instructions()
+        if active_instructions:
+            lines.append("**Explicit Instructions**:")
+            for inst in active_instructions:
+                lines.append(f"  • {inst.key}: {inst.value}")
             lines.append("")
 
         return "\n".join(lines)
