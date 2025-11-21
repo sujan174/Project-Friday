@@ -303,12 +303,19 @@ Remember: Web scraping is a powerful tool for data collection. Use it ethically,
 
             # Create MCP server parameters for Firecrawl
             # Uses official Firecrawl MCP via npx
+            env_vars = {
+                **os.environ,
+                "FIRECRAWL_API_KEY": firecrawl_api_key
+            }
+            # Suppress MCP server debug output
+            if not self.verbose:
+                env_vars["DEBUG"] = ""
+                env_vars["NODE_ENV"] = "production"
+
             server_params = StdioServerParameters(
                 command="npx",
                 args=["-y", "firecrawl-mcp"],
-                env={
-                    "FIRECRAWL_API_KEY": firecrawl_api_key
-                }
+                env=env_vars
             )
 
             # Connect to MCP server

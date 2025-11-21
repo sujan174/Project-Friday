@@ -515,6 +515,17 @@ Remember: You're not just executing commands—you're helping users manage their
             Configured StdioServerParameters for Docker
                     session_logger: Optional session logger for tracking operations
         """
+        env_vars = {
+            **os.environ,
+            "JIRA_URL": jira_url,
+            "JIRA_USERNAME": jira_username,
+            "JIRA_API_TOKEN": jira_api_token,
+        }
+        # Suppress MCP server debug output
+        if not self.verbose:
+            env_vars["DEBUG"] = ""
+            env_vars["NODE_ENV"] = "production"
+
         return StdioServerParameters(
             command="docker",
             args=[
@@ -522,14 +533,11 @@ Remember: You're not just executing commands—you're helping users manage their
                 "-e", "JIRA_URL",
                 "-e", "JIRA_USERNAME",
                 "-e", "JIRA_API_TOKEN",
+                "-e", "DEBUG",
+                "-e", "NODE_ENV",
                 "ghcr.io/sooperset/mcp-atlassian:latest"
             ],
-            env={
-                **os.environ,
-                "JIRA_URL": jira_url,
-                "JIRA_USERNAME": jira_username,
-                "JIRA_API_TOKEN": jira_api_token,
-            }
+            env=env_vars
         )
 
     async def _connect_to_mcp(self, server_params: StdioServerParameters):
