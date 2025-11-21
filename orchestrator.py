@@ -690,13 +690,28 @@ Prefer using healthy agents when possible. If a user specifically requests an un
                     elif value in ['verbose', 'detailed']:
                         value = 'verbose'
 
-                # Store the instruction
+                # Store the instruction in legacy system
                 was_new = self.user_prefs.add_explicit_instruction(
                     instruction=message,
                     category=category,
                     key=extracted_key,
                     value=value
                 )
+
+                # Store in NEW unified memory system
+                if hasattr(self, 'memory'):
+                    if category == 'timezone':
+                        self.memory.remember_preference(
+                            'timezone',
+                            value,
+                            category='datetime'
+                        )
+                    else:
+                        self.memory.remember_preference(
+                            extracted_key,
+                            value,
+                            category=category
+                        )
 
                 # Save preferences to disk
                 try:
@@ -1505,8 +1520,25 @@ Provide a clear instruction describing what you want to accomplish.""",
             parsed_instruction = await self.instruction_parser.parse(user_message)
 
             if parsed_instruction.is_instruction and parsed_instruction.confidence >= 0.5:
-                # Store in instruction memory
+                # Store in instruction memory (legacy)
                 self.instruction_memory.add(parsed_instruction)
+
+                # Store in NEW unified memory system
+                if hasattr(self, 'memory'):
+                    if parsed_instruction.category == 'timezone':
+                        # Store timezone as a preference
+                        self.memory.remember_preference(
+                            'timezone',
+                            parsed_instruction.value,
+                            category='datetime'
+                        )
+                    else:
+                        # Store other instructions
+                        self.memory.remember_instruction(
+                            f"{parsed_instruction.key}: {parsed_instruction.value}",
+                            context=parsed_instruction.category,
+                            priority=7
+                        )
 
                 # Apply specific instruction types
                 if parsed_instruction.category == 'timezone' and parsed_instruction.value:
