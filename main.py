@@ -50,31 +50,60 @@ class _SuppressingStderr:
     def __init__(self, original):
         self._original = original
         self._buffer = ""
+        self._in_suppressed_block = False
 
     def write(self, text):
         if _shutting_down:
             # Buffer the text to check if it's an MCP error
             self._buffer += text
-            if "\n" in self._buffer:
-                lines = self._buffer.split("\n")
-                for line in lines[:-1]:
-                    # Only suppress MCP/anyio cleanup errors
-                    if not any(pattern in line for pattern in [
-                        "error occurred during closing of asynchronous generator",
-                        "stdio_client",
-                        "cancel scope",
-                        "different task",
-                        "BaseExceptionGroup",
-                        "GeneratorExit",
-                        "anyio._backends._asyncio"
-                    ]):
-                        self._original.write(line + "\n")
-                self._buffer = lines[-1]
+
+            # Check if this buffer contains MCP error indicators
+            mcp_error_patterns = [
+                "error occurred during closing of asynchronous generator",
+                "stdio_client",
+                "cancel scope",
+                "different task",
+                "BaseExceptionGroup",
+                "GeneratorExit",
+                "anyio._backends._asyncio",
+                "mcp/client/stdio",
+                "unhandled errors in a TaskGroup"
+            ]
+
+            # If we see an MCP error pattern, start suppressing
+            if any(pattern in self._buffer for pattern in mcp_error_patterns):
+                self._in_suppressed_block = True
+
+            # Check for end of error block (empty line or new non-error content)
+            if self._buffer.endswith("\n\n") or (
+                self._buffer.count("\n") > 1 and
+                not any(pattern in self._buffer for pattern in mcp_error_patterns + [
+                    "Traceback", "File ", "  |", "  +", "+-+", "+---", "    |", "    +"
+                ])
+            ):
+                # If we're not in a suppressed block, output the buffer
+                if not self._in_suppressed_block:
+                    self._original.write(self._buffer)
+                # Reset for next block
+                self._buffer = ""
+                self._in_suppressed_block = False
         else:
             self._original.write(text)
 
     def flush(self):
-        if self._buffer and not _shutting_down:
+        # During shutdown, check if remaining buffer should be suppressed
+        if _shutting_down and self._buffer:
+            mcp_error_patterns = [
+                "error occurred during closing of asynchronous generator",
+                "stdio_client", "cancel scope", "different task",
+                "BaseExceptionGroup", "GeneratorExit", "anyio._backends._asyncio",
+                "mcp/client/stdio", "unhandled errors in a TaskGroup",
+                "Traceback", "RuntimeError"
+            ]
+            if not any(pattern in self._buffer for pattern in mcp_error_patterns):
+                self._original.write(self._buffer)
+            self._buffer = ""
+        elif self._buffer:
             self._original.write(self._buffer)
             self._buffer = ""
         self._original.flush()
