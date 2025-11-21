@@ -36,42 +36,76 @@ from ui.enhanced_terminal_ui import EnhancedTerminalUI
 # task context, causing RuntimeError: "Attempted to exit cancel scope in a
 # different task than it was entered in"
 #
-# This fix installs a custom async generator finalizer that suppresses these
-# specific errors during shutdown, which don't affect functionality.
+# This fix suppresses these errors during shutdown via multiple mechanisms:
+# 1. Custom async generator finalizer that silently ignores errors
+# 2. Custom excepthook to suppress printed errors
+# 3. Stderr redirection during shutdown
 # ============================================================================
 
 _shutting_down = False
+_original_stderr = sys.stderr
 
-def _create_safe_finalizer(loop):
-    """Create a finalizer that safely closes async generators during shutdown"""
-    def safe_finalizer(agen):
+class _SuppressingStderr:
+    """Stderr wrapper that suppresses MCP cleanup errors during shutdown"""
+    def __init__(self, original):
+        self._original = original
+        self._buffer = ""
+
+    def write(self, text):
         if _shutting_down:
-            # During shutdown, suppress task context errors from MCP cleanup
-            try:
-                loop.run_until_complete(agen.aclose())
-            except RuntimeError as e:
-                # Suppress "cancel scope in different task" errors
-                if "cancel scope" in str(e) or "different task" in str(e):
-                    pass
-                else:
-                    raise
-            except Exception:
-                # Suppress all errors during shutdown - connections will close anyway
-                pass
+            # Buffer the text to check if it's an MCP error
+            self._buffer += text
+            if "\n" in self._buffer:
+                lines = self._buffer.split("\n")
+                for line in lines[:-1]:
+                    # Only suppress MCP/anyio cleanup errors
+                    if not any(pattern in line for pattern in [
+                        "error occurred during closing of asynchronous generator",
+                        "stdio_client",
+                        "cancel scope",
+                        "different task",
+                        "BaseExceptionGroup",
+                        "GeneratorExit",
+                        "anyio._backends._asyncio"
+                    ]):
+                        self._original.write(line + "\n")
+                self._buffer = lines[-1]
         else:
-            # Normal operation - use default behavior
-            loop.run_until_complete(agen.aclose())
-    return safe_finalizer
+            self._original.write(text)
 
-def setup_asyncgen_hooks():
-    """Set up async generator hooks to handle MCP cleanup gracefully"""
+    def flush(self):
+        if self._buffer and not _shutting_down:
+            self._original.write(self._buffer)
+            self._buffer = ""
+        self._original.flush()
+
+    def __getattr__(self, name):
+        return getattr(self._original, name)
+
+# Install suppressing stderr wrapper
+sys.stderr = _SuppressingStderr(_original_stderr)
+
+def _silent_finalizer(agen):
+    """Async generator finalizer that silently suppresses all errors during shutdown"""
+    if _shutting_down:
+        # During shutdown, don't try to close - just ignore
+        # The process is ending anyway
+        return
+
+    # During normal operation, try to close properly
     try:
         loop = asyncio.get_event_loop()
-        if not loop.is_closed():
-            sys.set_asyncgen_hooks(finalizer=_create_safe_finalizer(loop))
-    except RuntimeError:
-        # No event loop available yet, will be set up later
+        if loop.is_running():
+            # Schedule the close
+            loop.create_task(agen.aclose())
+        elif not loop.is_closed():
+            loop.run_until_complete(agen.aclose())
+    except Exception:
+        # Suppress all errors - we tried our best
         pass
+
+# Install the silent finalizer
+sys.set_asyncgen_hooks(finalizer=_silent_finalizer)
 
 # Suppress specific warnings from anyio/MCP during cleanup
 warnings.filterwarnings(
@@ -92,7 +126,8 @@ def _custom_unraisable_hook(unraisable):
 
         # Suppress cancel scope and stdio_client errors during shutdown
         if any(pattern in err_str or pattern in obj_str for pattern in [
-            "cancel scope", "different task", "stdio_client", "TaskGroup"
+            "cancel scope", "different task", "stdio_client", "TaskGroup",
+            "GeneratorExit", "BaseExceptionGroup"
         ]):
             return  # Suppress the error
 
