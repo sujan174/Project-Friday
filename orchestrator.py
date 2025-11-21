@@ -10,7 +10,7 @@ import google.generativeai as genai
 import google.generativeai.protos as protos
 from dotenv import load_dotenv
 
-
+ 
 from pathlib import Path
 import importlib.util
 
@@ -24,7 +24,7 @@ from core.simple_session_logger import SimpleSessionLogger
 
 # Import advanced intelligence system
 from intelligence import (
-    IntentClassifier, EntityExtractor, TaskDecomposer,
+    TaskDecomposer,
     ConfidenceScorer, ConversationContextManager
 )
 
@@ -62,9 +62,6 @@ from core.datetime_context import (
 from intelligence.instruction_parser import (
     IntelligentInstructionParser, InstructionMemory, ParsedInstruction
 )
-
-# Import unified memory system
-from core.memory import MemoryManager
 
 logger = get_logger(__name__)
 load_dotenv()
@@ -190,11 +187,7 @@ class OrchestratorAgent:
             verbose=self.verbose
         )
 
-        # Keep legacy components for backward compatibility (may be removed later)
-        self.intent_classifier = IntentClassifier(verbose=self.verbose)
-        self.entity_extractor = EntityExtractor(verbose=self.verbose)
-
-        # Other intelligence components (still used)
+        # Other intelligence components
         self.task_decomposer = TaskDecomposer(
             agent_capabilities=self.agent_capabilities,
             verbose=self.verbose
@@ -255,26 +248,8 @@ class OrchestratorAgent:
         # 6. Error Message Enhancer - Better error messages
         self.error_enhancer = ErrorMessageEnhancer(verbose=self.verbose)
 
-        # Load user preferences from file if exists
-        self.prefs_file = Path(f"data/preferences/{user_id}.json")
-        self.prefs_file.parent.mkdir(parents=True, exist_ok=True)
-        if self.prefs_file.exists():
-            try:
-                self.user_prefs.load_from_file(str(self.prefs_file))
-                if self.verbose:
-                    print(f"{C.CYAN}📊 Loaded user preferences from {self.prefs_file}{C.ENDC}")
-
-                # Apply saved timezone preference to global datetime context
-                saved_timezone = self.user_prefs.get_instruction_value('timezone')
-                if saved_timezone:
-                    if set_user_timezone(saved_timezone):
-                        if self.verbose:
-                            print(f"{C.CYAN}🕐 Applied saved timezone: {saved_timezone}{C.ENDC}")
-            except Exception as e:
-                logger.warning(f"Failed to load preferences: {e}")
-
         # ===================================================================
-        # INTELLIGENT INSTRUCTION SYSTEM
+        # INTELLIGENT INSTRUCTION SYSTEM (in-memory only)
         # ===================================================================
 
         # Initialize intelligent instruction parser (uses LLM for semantic understanding)
@@ -283,64 +258,23 @@ class OrchestratorAgent:
             verbose=self.verbose
         )
 
-        # Initialize instruction memory (persistent storage)
-        instructions_file = Path(f"data/instructions/{user_id}.json")
-        instructions_file.parent.mkdir(parents=True, exist_ok=True)
+        # Initialize instruction memory (in-memory, no persistence)
         self.instruction_memory = InstructionMemory(
-            storage_path=str(instructions_file),
+            storage_path=None,
             verbose=self.verbose
         )
-
-        # Apply saved instructions (like timezone)
-        saved_timezone = self.instruction_memory.get('timezone')
-        if saved_timezone:
-            if set_user_timezone(saved_timezone):
-                # Always show timezone being applied (important for user awareness)
-                print(f"{C.CYAN}🕐 Applied saved timezone: {saved_timezone}{C.ENDC}")
-
-        # Show loaded instructions count
-        active_count = len(self.instruction_memory.get_all())
-        if active_count > 0:
-            print(f"{C.CYAN}📝 Loaded {active_count} active instruction(s) from {instructions_file}{C.ENDC}")
-            if self.verbose:
-                for key, value in self.instruction_memory.get_all().items():
-                    print(f"{C.CYAN}   • {key}: {value}{C.ENDC}")
-
-        # ===================================================================
-        # UNIFIED MEMORY SYSTEM
-        # ===================================================================
-
-        # Initialize the unified memory manager
-        self.memory = MemoryManager(storage_dir="memory")
-
-        # Start memory session
-        self.memory.start_session(self.session_id)
-
-        # Migrate existing preferences to memory system
-        saved_timezone = self.instruction_memory.get('timezone')
-        if saved_timezone:
-            self.memory.remember_preference('timezone', saved_timezone, category='datetime')
-
-        # Show memory stats
-        memory_stats = self.memory.get_stats()
-        total_memories = (
-            memory_stats['semantic']['preferences'] +
-            memory_stats['semantic']['instructions'] +
-            memory_stats['episodic']['total_actions'] +
-            memory_stats['procedural']['patterns']
-        )
-        if total_memories > 0:
-            print(f"{C.CYAN}🧠 Memory loaded: {total_memories} memories across all types{C.ENDC}")
-            if self.verbose:
-                print(f"{C.CYAN}   • Preferences: {memory_stats['semantic']['preferences']}{C.ENDC}")
-                print(f"{C.CYAN}   • Instructions: {memory_stats['semantic']['instructions']}{C.ENDC}")
-                print(f"{C.CYAN}   • Actions: {memory_stats['episodic']['total_actions']}{C.ENDC}")
-                print(f"{C.CYAN}   • Patterns: {memory_stats['procedural']['patterns']}{C.ENDC}")
 
         # ===================================================================
 
         # Register undo handlers
         self._register_undo_handlers()
+
+        # ===================================================================
+
+        # Set default timezone to IST (Indian Standard Time)
+        set_user_timezone('IST')
+        if self.verbose:
+            print(f"{C.CYAN}🕐 Default timezone: IST (Asia/Kolkata){C.ENDC}")
 
         # ===================================================================
 
@@ -513,24 +447,6 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
         datetime_context = format_datetime_for_prompt()
         prompt += "\n\n" + datetime_context
 
-        # Add memory context from unified memory system (highest priority)
-        if hasattr(self, 'memory'):
-            # Get preferences from memory
-            prefs = self.memory.list_preferences()
-            if prefs:
-                pref_lines = ["# User Preferences (from Memory)"]
-                for p in prefs:
-                    pref_lines.append(f"- {p['key']}: {p['value']}")
-                prompt += "\n\n" + "\n".join(pref_lines)
-
-            # Get instructions from memory
-            instructions = self.memory.get_instructions()
-            if instructions:
-                instr_lines = ["# User Instructions (from Memory)"]
-                for i in instructions:
-                    instr_lines.append(f"- {i}")
-                prompt += "\n\n" + "\n".join(instr_lines)
-
         # Add explicit user instructions from intelligent instruction memory (highest priority)
         if hasattr(self, 'instruction_memory'):
             instruction_prompt = self.instruction_memory.format_for_prompt()
@@ -690,34 +606,13 @@ Prefer using healthy agents when possible. If a user specifically requests an un
                     elif value in ['verbose', 'detailed']:
                         value = 'verbose'
 
-                # Store the instruction in legacy system
+                # Store the instruction
                 was_new = self.user_prefs.add_explicit_instruction(
                     instruction=message,
                     category=category,
                     key=extracted_key,
                     value=value
                 )
-
-                # Store in NEW unified memory system
-                if hasattr(self, 'memory'):
-                    if category == 'timezone':
-                        self.memory.remember_preference(
-                            'timezone',
-                            value,
-                            category='datetime'
-                        )
-                    else:
-                        self.memory.remember_preference(
-                            extracted_key,
-                            value,
-                            category=category
-                        )
-
-                # Save preferences to disk
-                try:
-                    self.user_prefs.save_to_file(str(self.prefs_file))
-                except Exception as e:
-                    logger.warning(f"Failed to save preferences: {e}")
 
                 # Generate confirmation
                 if was_new:
@@ -1218,24 +1113,6 @@ Provide a clear instruction describing what you want to accomplish.""",
             if success:
                 await self.circuit_breaker.record_success(agent_name)
 
-            # Record action to unified memory system
-            if hasattr(self, 'memory'):
-                # Extract entities from instruction
-                entities = []
-                for word in instruction.split():
-                    if word[0].isupper() and len(word) > 2:
-                        entities.append(word.strip('.,;:!?'))
-
-                self.memory.record_action(
-                    action_type=f"{agent_name}_operation",
-                    agent=agent_name,
-                    input_summary=instruction[:200],
-                    output_summary=result[:200] if result else "",
-                    success=success,
-                    duration_ms=latency_ms,
-                    entities=entities
-                )
-
             if self.verbose:
                 status = "✓" if success else "✗"
                 print(f"{C.GREEN if success else C.RED}{status} {agent_name} completed ({latency_ms:.0f}ms){C.ENDC}")
@@ -1486,18 +1363,6 @@ Provide a clear instruction describing what you want to accomplish.""",
         self.simple_logger.log_user_message(user_message)
 
         # ===================================================================
-        # MEMORY COMMAND PROCESSING
-        # ===================================================================
-
-        # Check if this is a memory command (remember, forget, recall)
-        if hasattr(self, 'memory'):
-            memory_response = self.memory.process_memory_command(user_message)
-            if memory_response:
-                if self.verbose:
-                    print(f"{C.GREEN}🧠 Memory command processed{C.ENDC}")
-                return self._log_and_return_response(memory_response)
-
-        # ===================================================================
         # USER PREFERENCES & ANALYTICS TRACKING
         # ===================================================================
 
@@ -1520,25 +1385,8 @@ Provide a clear instruction describing what you want to accomplish.""",
             parsed_instruction = await self.instruction_parser.parse(user_message)
 
             if parsed_instruction.is_instruction and parsed_instruction.confidence >= 0.5:
-                # Store in instruction memory (legacy)
+                # Store in instruction memory
                 self.instruction_memory.add(parsed_instruction)
-
-                # Store in NEW unified memory system
-                if hasattr(self, 'memory'):
-                    if parsed_instruction.category == 'timezone':
-                        # Store timezone as a preference
-                        self.memory.remember_preference(
-                            'timezone',
-                            parsed_instruction.value,
-                            category='datetime'
-                        )
-                    else:
-                        # Store other instructions
-                        self.memory.remember_instruction(
-                            f"{parsed_instruction.key}: {parsed_instruction.value}",
-                            context=parsed_instruction.category,
-                            priority=7
-                        )
 
                 # Apply specific instruction types
                 if parsed_instruction.category == 'timezone' and parsed_instruction.value:
@@ -2086,37 +1934,6 @@ Provide a clear instruction describing what you want to accomplish.""",
                 print(f"{C.RED}  ✗ Error shutting down {agent_name}: {e}{C.ENDC}")
 
         # ===================================================================
-        # END MEMORY SESSION AND CONSOLIDATE
-        # ===================================================================
-
-        if hasattr(self, 'memory'):
-            try:
-                # End session and consolidate memories
-                self.memory.end_session()
-
-                # Run consolidation to learn patterns
-                consolidation_stats = self.memory.consolidate()
-
-                if self.verbose:
-                    print(f"{C.GREEN}  ✓ Memory session ended and consolidated{C.ENDC}")
-                    if consolidation_stats['patterns_detected'] > 0:
-                        print(f"{C.CYAN}    • Detected {consolidation_stats['patterns_detected']} new patterns{C.ENDC}")
-                    if consolidation_stats['preferences_inferred'] > 0:
-                        print(f"{C.CYAN}    • Inferred {consolidation_stats['preferences_inferred']} preferences{C.ENDC}")
-
-                # Show final memory stats
-                stats = self.memory.get_stats()
-                if self.verbose:
-                    print(f"{C.CYAN}  🧠 Final memory stats:{C.ENDC}")
-                    print(f"{C.CYAN}    • Preferences: {stats['semantic']['preferences']}{C.ENDC}")
-                    print(f"{C.CYAN}    • Instructions: {stats['semantic']['instructions']}{C.ENDC}")
-                    print(f"{C.CYAN}    • Actions: {stats['episodic']['total_actions']}{C.ENDC}")
-                    print(f"{C.CYAN}    • Patterns: {stats['procedural']['patterns']}{C.ENDC}")
-
-            except Exception as e:
-                logger.warning(f"Failed to end memory session: {e}")
-
-        # ===================================================================
         # SAVE ANALYTICS AND PREFERENCES
         # ===================================================================
 
@@ -2130,15 +1947,6 @@ Provide a clear instruction describing what you want to accomplish.""",
                     print(f"{C.CYAN}    {self.analytics.generate_summary_report()}{C.ENDC}")
             except Exception as e:
                 logger.warning(f"Failed to process analytics: {e}")
-
-        # Save user preferences
-        if hasattr(self, 'user_prefs') and hasattr(self, 'prefs_file'):
-            try:
-                self.user_prefs.save_to_file(str(self.prefs_file))
-                if self.verbose:
-                    print(f"{C.GREEN}  ✓ Preferences saved: {self.prefs_file}{C.ENDC}")
-            except Exception as e:
-                logger.warning(f"Failed to save preferences: {e}")
 
         # Display retry statistics
         if hasattr(self, 'retry_manager') and self.verbose:
