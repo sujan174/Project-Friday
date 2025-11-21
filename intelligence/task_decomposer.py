@@ -438,12 +438,35 @@ class TaskDecomposer:
         Optimize execution plan
 
         Optimizations:
-        - Remove redundant tasks
-        - Merge similar tasks
-        - Reorder for efficiency
+        - Remove redundant tasks (same agent + action + inputs)
+        - Update estimated metrics
         """
-        # TODO: Implement optimizations
-        # For now, return as-is
+        if not plan.tasks:
+            return plan
+
+        optimized_tasks = []
+        seen_signatures = set()
+
+        # Remove redundant tasks
+        for task in plan.tasks:
+            # Create signature from agent, action, and sorted inputs
+            inputs_str = str(sorted(task.inputs.items())) if task.inputs else ""
+            signature = f"{task.agent}:{task.action}:{inputs_str}"
+
+            if signature not in seen_signatures:
+                seen_signatures.add(signature)
+                optimized_tasks.append(task)
+
+        # Record optimization if tasks were removed
+        removed_count = len(plan.tasks) - len(optimized_tasks)
+        if removed_count > 0:
+            plan.optimizations.append(f"Removed {removed_count} redundant task(s)")
+            plan.tasks = optimized_tasks
+
+            # Update estimated metrics
+            plan.estimated_duration = sum(t.estimated_duration for t in optimized_tasks)
+            plan.estimated_cost = sum(t.estimated_cost for t in optimized_tasks)
+
         return plan
 
     def explain_plan(self, plan: ExecutionPlan) -> str:
