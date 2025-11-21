@@ -197,11 +197,18 @@ async def main():
         # Show header
         ui.print_header(orchestrator.session_id)
 
-        # Discover agents with beautiful display
-        ui.console.print("[bold cyan]🔌 Discovering Agents...[/bold cyan]\n")
+        # Discover agents with spinner
+        from rich.progress import Progress, SpinnerColumn, TextColumn
 
-        # Load agents (using existing method)
-        await orchestrator.discover_and_load_agents()
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[bold cyan]{task.description}[/bold cyan]"),
+            console=ui.console,
+            transient=True
+        ) as progress:
+            task = progress.add_task("Loading agents...", total=None)
+            await orchestrator.discover_and_load_agents()
+            progress.update(task, description="Agents loaded!")
 
         # Show agent summary
         loaded_agents = []

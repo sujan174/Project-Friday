@@ -835,7 +835,8 @@ Prefer using healthy agents when possible. If a user specifically requests an un
             return
 
         # Load all agents in parallel using asyncio.gather
-        print(f"{C.CYAN}Loading {len(connector_files)} agent(s) in parallel...{C.ENDC}\n")
+        if self.verbose:
+            print(f"{C.CYAN}Loading {len(connector_files)} agent(s) in parallel...{C.ENDC}\n")
 
         load_tasks = [self._load_single_agent(f) for f in connector_files]
         results = await asyncio.gather(*load_tasks, return_exceptions=True)
@@ -864,9 +865,10 @@ Prefer using healthy agents when possible. If a user specifically requests an un
 
             agent_name, agent_instance, capabilities, messages = result
 
-            # Print buffered messages
-            for msg in messages:
-                print(msg)
+            # Print buffered messages only in verbose mode
+            if self.verbose:
+                for msg in messages:
+                    print(msg)
 
             # Store agent if successfully loaded
             if agent_instance is not None and capabilities is not None:
@@ -898,12 +900,11 @@ Prefer using healthy agents when possible. If a user specifically requests an un
                 }
                 failed += 1
 
-        # Summary
-        print(f"\n{C.GREEN}✓ Loaded {successful} agent(s) successfully.{C.ENDC}")
-        if failed > 0:
-            print(f"{C.YELLOW}⚠ {failed} agent(s) failed to load but system will continue.{C.ENDC}")
-
+        # Summary (only in verbose mode)
         if self.verbose:
+            print(f"\n{C.GREEN}✓ Loaded {successful} agent(s) successfully.{C.ENDC}")
+            if failed > 0:
+                print(f"{C.YELLOW}⚠ {failed} agent(s) failed to load but system will continue.{C.ENDC}")
             print(f"{C.YELLOW}{'='*60}{C.ENDC}\n")
     
     def _create_agent_tools(self) -> List[protos.FunctionDeclaration]:
@@ -1411,9 +1412,10 @@ Provide a clear instruction describing what you want to accomplish.""",
 
         # Initialize on first message
         if not self.chat:
-            # Run the discovery task with a spinner
-            discover_task = asyncio.create_task(self.discover_and_load_agents())
-            await self._spinner(discover_task, "Discovering agents")
+            # Only discover agents if not already loaded (main.py may have loaded them)
+            if not self.sub_agents:
+                discover_task = asyncio.create_task(self.discover_and_load_agents())
+                await self._spinner(discover_task, "Discovering agents")
 
             if not self.sub_agents:
                 return self._log_and_return_response("No agents available. Please add agent connectors to the 'connectors' directory.")

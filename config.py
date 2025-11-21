@@ -32,11 +32,11 @@ class Config:
     MAX_REGEX_PATTERN_LENGTH = int(os.getenv('MAX_REGEX_LENGTH', '1000'))
 
     # Logging Configuration
-    LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
+    LOG_LEVEL = os.getenv('LOG_LEVEL', 'WARNING')  # Suppress INFO logs by default
     LOG_DIR = os.getenv('LOG_DIR', 'logs')
     ENABLE_FILE_LOGGING = os.getenv('ENABLE_FILE_LOGGING', 'true').lower() == 'true'
     ENABLE_JSON_LOGGING = os.getenv('ENABLE_JSON_LOGGING', 'true').lower() == 'true'
-    ENABLE_CONSOLE_LOGGING = os.getenv('ENABLE_CONSOLE_LOGGING', 'true').lower() == 'true'
+    ENABLE_CONSOLE_LOGGING = os.getenv('ENABLE_CONSOLE_LOGGING', 'false').lower() == 'true'  # Disable console logs by default
     ENABLE_COLORED_LOGS = os.getenv('ENABLE_COLORED_LOGS', 'true').lower() == 'true'
     MAX_LOG_FILE_SIZE_MB = int(os.getenv('MAX_LOG_FILE_SIZE_MB', '10'))
     LOG_BACKUP_COUNT = int(os.getenv('LOG_BACKUP_COUNT', '5'))
