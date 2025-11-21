@@ -834,7 +834,9 @@ Remember: Calendar management is about respecting time - the most finite resourc
             # Prepare environment variables
             env_vars = {
                 **os.environ,
-                "GOOGLE_OAUTH_CREDENTIALS": credentials_path
+                "GOOGLE_OAUTH_CREDENTIALS": credentials_path,
+                # Prevent automatic browser opening for OAuth - user will authenticate manually
+                "BROWSER": "none"
             }
             if not self.verbose:
                 # Suppress debug output from MCP server
