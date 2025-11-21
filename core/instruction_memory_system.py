@@ -197,6 +197,25 @@ class InstructionMemorySystem:
         # Check if updating existing
         is_update = instruction_id in self.instructions
 
+        # ===================================================================
+        # IMPORTANT: For default instructions, deactivate existing ones of the same type
+        # This prevents conflicts like having both "timezone: EST" and "timezone: IST"
+        # ===================================================================
+        if category == "default":
+            deactivated_count = 0
+            for inst in self.instructions.values():
+                if (inst.is_active and
+                    inst.category == "default" and
+                    inst.instruction_type == instruction_type and
+                    inst.id != instruction_id):
+                    inst.is_active = False
+                    deactivated_count += 1
+                    if self.verbose:
+                        print(f"[INSTRUCTION MEMORY] Deactivated old {instruction_type}: {inst.content[:50]}...")
+
+            if deactivated_count > 0 and self.verbose:
+                print(f"[INSTRUCTION MEMORY] Replaced {deactivated_count} existing {instruction_type} instruction(s)")
+
         # Generate embedding for semantic search
         embedding = None
         if self.embedding_fn:
@@ -501,6 +520,45 @@ class InstructionMemorySystem:
             if not self.has_default(default_type):
                 missing.append(default_type)
         return missing
+
+    def deduplicate_defaults(self) -> int:
+        """
+        Clean up duplicate default instructions, keeping only the most recent per type.
+
+        This fixes conflicts like having both "timezone: EST" and "timezone: IST".
+        Only the most recently updated instruction of each type is kept.
+
+        Returns:
+            Number of duplicates removed
+        """
+        # Group defaults by type
+        defaults_by_type: Dict[str, List[StoredInstruction]] = {}
+        for inst in self.instructions.values():
+            if inst.is_active and inst.category == InstructionCategory.DEFAULT.value:
+                if inst.instruction_type not in defaults_by_type:
+                    defaults_by_type[inst.instruction_type] = []
+                defaults_by_type[inst.instruction_type].append(inst)
+
+        # Deactivate all but the most recent per type
+        deactivated = 0
+        for inst_type, instructions in defaults_by_type.items():
+            if len(instructions) > 1:
+                # Sort by updated_at descending (most recent first)
+                instructions.sort(key=lambda x: x.updated_at, reverse=True)
+                # Keep the first (most recent), deactivate the rest
+                for inst in instructions[1:]:
+                    inst.is_active = False
+                    deactivated += 1
+                    if self.verbose:
+                        print(f"[INSTRUCTION MEMORY] Deduped: deactivated old {inst_type}: {inst.content[:50]}...")
+
+        if deactivated > 0:
+            if self.storage_path:
+                self._save()
+            if self.verbose:
+                print(f"[INSTRUCTION MEMORY] Removed {deactivated} duplicate default instruction(s)")
+
+        return deactivated
 
     def get_statistics(self) -> Dict:
         """Get system statistics"""

@@ -337,6 +337,11 @@ class OrchestratorAgent:
             verbose=self.verbose
         )
 
+        # Clean up any duplicate default instructions (e.g., multiple timezones)
+        deduped = self.instruction_memory_system.deduplicate_defaults()
+        if deduped > 0:
+            print(f"{C.YELLOW}🧹 Cleaned up {deduped} conflicting instruction(s){C.ENDC}")
+
         # Show loaded instructions from new system
         new_system_stats = self.instruction_memory_system.get_statistics()
         if new_system_stats['total_instructions'] > 0:
