@@ -31,6 +31,9 @@ class Config:
     ENABLE_INPUT_SANITIZATION = os.getenv('ENABLE_SANITIZATION', 'true').lower() == 'true'
     MAX_REGEX_PATTERN_LENGTH = int(os.getenv('MAX_REGEX_LENGTH', '1000'))
 
+    # Timezone Configuration
+    USER_TIMEZONE = os.getenv('USER_TIMEZONE', os.getenv('TZ', 'Asia/Kolkata'))  # Default to IST
+
     # Logging Configuration
     LOG_LEVEL = os.getenv('LOG_LEVEL', 'WARNING')  # Suppress INFO logs by default
     LOG_DIR = os.getenv('LOG_DIR', 'logs')

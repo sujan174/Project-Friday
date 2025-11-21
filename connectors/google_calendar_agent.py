@@ -36,6 +36,7 @@ from mcp.client.stdio import stdio_client
 # Add parent directory to path to import base_agent
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from connectors.base_agent import BaseAgent, safe_extract_response_text
+from config import Config
 from connectors.agent_intelligence import (
     ConversationMemory,
     WorkspaceKnowledge,
@@ -726,13 +727,19 @@ Best times for scheduling:
 
 **CRITICAL RULES**:
 1. **Always check for conflicts** before creating events
-2. **Confirm timezone** for all times (default to user's local timezone)
-3. **Parse natural language carefully** - "tomorrow" depends on current date
-4. **Include meeting context** - titles, agendas, locations, conferencing
-5. **Respect working hours** - don't schedule outside 9am-6pm without permission
-6. **Handle recurring events precisely** - understand "this instance" vs "all events"
-7. **Notify attendees** - send invitations when adding people to events
-8. **Be proactive about conflicts** - suggest alternatives, don't just report errors
+2. **ALWAYS include explicit timezone** when creating events - use the timezone from the context (shown in Current Time). NEVER create events without timezone.
+3. **Use user's timezone from context** - Look at the Current Time context for the user's configured timezone (e.g., Asia/Kolkata for IST)
+4. **When user specifies timezone (IST, PST, etc.)** - Map to proper IANA timezone:
+   - IST = Asia/Kolkata (NOT converted to UTC)
+   - PST = America/Los_Angeles
+   - EST = America/New_York
+   - GMT/UTC = UTC
+5. **Parse natural language carefully** - "tomorrow" depends on current date
+6. **Include meeting context** - titles, agendas, locations, conferencing
+7. **Respect working hours** - don't schedule outside 9am-6pm without permission
+8. **Handle recurring events precisely** - understand "this instance" vs "all events"
+9. **Notify attendees** - send invitations when adding people to events
+10. **Be proactive about conflicts** - suggest alternatives, don't just report errors
 
 **Scheduling Philosophy**:
 - Protect focus time and deep work blocks
@@ -970,29 +977,12 @@ Remember: Calendar management is about respecting time - the most finite resourc
         - timezone_offset: UTC offset string
         - day_of_week: Full day name
         """
-        # Try to get system timezone
+        # Get timezone from Config (defaults to Asia/Kolkata for IST)
         try:
-            # Try to get from TZ environment variable or default
-            tz_name = os.environ.get('TZ', 'UTC')
-            if tz_name == 'UTC':
-                # Try to detect system timezone on Linux
-                if os.path.exists('/etc/timezone'):
-                    with open('/etc/timezone', 'r') as f:
-                        tz_name = f.read().strip()
-                elif os.path.exists('/etc/localtime'):
-                    import subprocess
-                    try:
-                        result = subprocess.run(['readlink', '-f', '/etc/localtime'],
-                                              capture_output=True, text=True)
-                        if result.returncode == 0:
-                            path = result.stdout.strip()
-                            if 'zoneinfo/' in path:
-                                tz_name = path.split('zoneinfo/')[-1]
-                    except:
-                        pass
-
+            tz_name = Config.USER_TIMEZONE
             tz = zoneinfo.ZoneInfo(tz_name)
-        except:
+        except Exception:
+            # Fallback to UTC if configured timezone is invalid
             tz = timezone.utc
             tz_name = 'UTC'
 
@@ -1108,11 +1098,12 @@ Remember: Calendar management is about respecting time - the most finite resourc
         # Add time context (very useful for calendar operations)
         time_context = self.metadata_cache.get('time_context', {})
         if time_context:
+            tz = time_context.get('timezone', 'Unknown')
             context_parts.append(
                 f"Current Time: {time_context.get('formatted_time', 'Unknown')} on "
                 f"{time_context.get('day_of_week', 'Unknown')}, "
                 f"{time_context.get('formatted_date', 'Unknown')} "
-                f"({time_context.get('timezone', 'Unknown')})"
+                f"| User Timezone: {tz} - USE THIS TIMEZONE for all events unless user specifies otherwise"
             )
 
         # Add calendars if available
