@@ -63,6 +63,9 @@ from intelligence.instruction_parser import (
     IntelligentInstructionParser, InstructionMemory, ParsedInstruction
 )
 
+# Import unified memory system
+from core.memory import MemoryManager
+
 logger = get_logger(__name__)
 load_dotenv()
 
@@ -304,6 +307,37 @@ class OrchestratorAgent:
                     print(f"{C.CYAN}   • {key}: {value}{C.ENDC}")
 
         # ===================================================================
+        # UNIFIED MEMORY SYSTEM
+        # ===================================================================
+
+        # Initialize the unified memory manager
+        self.memory = MemoryManager(storage_dir="memory")
+
+        # Start memory session
+        self.memory.start_session(self.session_id)
+
+        # Migrate existing preferences to memory system
+        saved_timezone = self.instruction_memory.get('timezone')
+        if saved_timezone:
+            self.memory.remember_preference('timezone', saved_timezone, category='datetime')
+
+        # Show memory stats
+        memory_stats = self.memory.get_stats()
+        total_memories = (
+            memory_stats['semantic']['preferences'] +
+            memory_stats['semantic']['instructions'] +
+            memory_stats['episodic']['total_actions'] +
+            memory_stats['procedural']['patterns']
+        )
+        if total_memories > 0:
+            print(f"{C.CYAN}🧠 Memory loaded: {total_memories} memories across all types{C.ENDC}")
+            if self.verbose:
+                print(f"{C.CYAN}   • Preferences: {memory_stats['semantic']['preferences']}{C.ENDC}")
+                print(f"{C.CYAN}   • Instructions: {memory_stats['semantic']['instructions']}{C.ENDC}")
+                print(f"{C.CYAN}   • Actions: {memory_stats['episodic']['total_actions']}{C.ENDC}")
+                print(f"{C.CYAN}   • Patterns: {memory_stats['procedural']['patterns']}{C.ENDC}")
+
+        # ===================================================================
 
         # Register undo handlers
         self._register_undo_handlers()
@@ -478,6 +512,24 @@ Remember: Your goal is to be genuinely helpful, making users more productive and
         # Add current datetime context (important for scheduling, relative times)
         datetime_context = format_datetime_for_prompt()
         prompt += "\n\n" + datetime_context
+
+        # Add memory context from unified memory system (highest priority)
+        if hasattr(self, 'memory'):
+            # Get preferences from memory
+            prefs = self.memory.list_preferences()
+            if prefs:
+                pref_lines = ["# User Preferences (from Memory)"]
+                for p in prefs:
+                    pref_lines.append(f"- {p['key']}: {p['value']}")
+                prompt += "\n\n" + "\n".join(pref_lines)
+
+            # Get instructions from memory
+            instructions = self.memory.get_instructions()
+            if instructions:
+                instr_lines = ["# User Instructions (from Memory)"]
+                for i in instructions:
+                    instr_lines.append(f"- {i}")
+                prompt += "\n\n" + "\n".join(instr_lines)
 
         # Add explicit user instructions from intelligent instruction memory (highest priority)
         if hasattr(self, 'instruction_memory'):
@@ -1151,6 +1203,24 @@ Provide a clear instruction describing what you want to accomplish.""",
             if success:
                 await self.circuit_breaker.record_success(agent_name)
 
+            # Record action to unified memory system
+            if hasattr(self, 'memory'):
+                # Extract entities from instruction
+                entities = []
+                for word in instruction.split():
+                    if word[0].isupper() and len(word) > 2:
+                        entities.append(word.strip('.,;:!?'))
+
+                self.memory.record_action(
+                    action_type=f"{agent_name}_operation",
+                    agent=agent_name,
+                    input_summary=instruction[:200],
+                    output_summary=result[:200] if result else "",
+                    success=success,
+                    duration_ms=latency_ms,
+                    entities=entities
+                )
+
             if self.verbose:
                 status = "✓" if success else "✗"
                 print(f"{C.GREEN if success else C.RED}{status} {agent_name} completed ({latency_ms:.0f}ms){C.ENDC}")
@@ -1399,6 +1469,18 @@ Provide a clear instruction describing what you want to accomplish.""",
 
         # SIMPLE SESSION LOGGING - Log user message
         self.simple_logger.log_user_message(user_message)
+
+        # ===================================================================
+        # MEMORY COMMAND PROCESSING
+        # ===================================================================
+
+        # Check if this is a memory command (remember, forget, recall)
+        if hasattr(self, 'memory'):
+            memory_response = self.memory.process_memory_command(user_message)
+            if memory_response:
+                if self.verbose:
+                    print(f"{C.GREEN}🧠 Memory command processed{C.ENDC}")
+                return self._log_and_return_response(memory_response)
 
         # ===================================================================
         # USER PREFERENCES & ANALYTICS TRACKING
@@ -1970,6 +2052,37 @@ Provide a clear instruction describing what you want to accomplish.""",
             except Exception as e:
                 # Always print errors
                 print(f"{C.RED}  ✗ Error shutting down {agent_name}: {e}{C.ENDC}")
+
+        # ===================================================================
+        # END MEMORY SESSION AND CONSOLIDATE
+        # ===================================================================
+
+        if hasattr(self, 'memory'):
+            try:
+                # End session and consolidate memories
+                self.memory.end_session()
+
+                # Run consolidation to learn patterns
+                consolidation_stats = self.memory.consolidate()
+
+                if self.verbose:
+                    print(f"{C.GREEN}  ✓ Memory session ended and consolidated{C.ENDC}")
+                    if consolidation_stats['patterns_detected'] > 0:
+                        print(f"{C.CYAN}    • Detected {consolidation_stats['patterns_detected']} new patterns{C.ENDC}")
+                    if consolidation_stats['preferences_inferred'] > 0:
+                        print(f"{C.CYAN}    • Inferred {consolidation_stats['preferences_inferred']} preferences{C.ENDC}")
+
+                # Show final memory stats
+                stats = self.memory.get_stats()
+                if self.verbose:
+                    print(f"{C.CYAN}  🧠 Final memory stats:{C.ENDC}")
+                    print(f"{C.CYAN}    • Preferences: {stats['semantic']['preferences']}{C.ENDC}")
+                    print(f"{C.CYAN}    • Instructions: {stats['semantic']['instructions']}{C.ENDC}")
+                    print(f"{C.CYAN}    • Actions: {stats['episodic']['total_actions']}{C.ENDC}")
+                    print(f"{C.CYAN}    • Patterns: {stats['procedural']['patterns']}{C.ENDC}")
+
+            except Exception as e:
+                logger.warning(f"Failed to end memory session: {e}")
 
         # ===================================================================
         # SAVE ANALYTICS AND PREFERENCES
