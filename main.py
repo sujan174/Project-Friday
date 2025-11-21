@@ -121,14 +121,15 @@ def _silent_finalizer(agen):
         # The process is ending anyway
         return
 
-    # During normal operation, try to close properly
+    # During normal operation, let Python handle it with default behavior
+    # Don't try to be clever with create_task as it causes "Task exception was never retrieved"
     try:
         loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # Schedule the close
-            loop.create_task(agen.aclose())
-        elif not loop.is_closed():
+        if not loop.is_closed() and not loop.is_running():
+            # Only close if loop exists and is not running
             loop.run_until_complete(agen.aclose())
+        # If loop is running, let the generator be garbage collected naturally
+        # This avoids the "Task exception was never retrieved" warning
     except Exception:
         # Suppress all errors - we tried our best
         pass

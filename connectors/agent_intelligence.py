@@ -269,6 +269,11 @@ class WorkspaceKnowledge:
     def _save(self):
         """Persist knowledge to disk"""
         try:
+            # Create parent directory if it doesn't exist
+            parent_dir = os.path.dirname(self.knowledge_file)
+            if parent_dir and not os.path.exists(parent_dir):
+                os.makedirs(parent_dir, exist_ok=True)
+
             with open(self.knowledge_file, 'w') as f:
                 json.dump(self.data, f, indent=2)
         except Exception as e:

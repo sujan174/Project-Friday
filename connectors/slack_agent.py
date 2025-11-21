@@ -908,6 +908,14 @@ Remember: Slack is the nervous system of distributed teams. Every message you cr
     async def _fetch_all_users(self) -> Dict:
         """Fetch all users (limit to active to avoid huge lists)"""
         try:
+            # Check if slack_list_users tool exists before calling
+            # This tool may not be available in all versions of the MCP server
+            tool_exists = any(tool.name == "slack_list_users" for tool in self.available_tools)
+            if not tool_exists:
+                if self.verbose:
+                    print(f"[SLACK AGENT] slack_list_users tool not available, skipping user fetch")
+                return {}
+
             # Use Slack MCP tool to list users
             result = await self.session.call_tool("slack_list_users", {})
 
