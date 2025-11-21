@@ -56,7 +56,7 @@ class _SuppressingStderr:
         # Always buffer to check for MCP errors (both during startup and shutdown)
         self._buffer += text
 
-        # Check if this buffer contains MCP error indicators
+        # Check if this buffer contains MCP error/debug indicators
         mcp_error_patterns = [
             "error occurred during closing of asynchronous generator",
             "stdio_client",
@@ -68,7 +68,13 @@ class _SuppressingStderr:
             "mcp/client/stdio",
             "unhandled errors in a TaskGroup",
             "Task exception was never retrieved",
-            "async_generator_athrow"
+            "async_generator_athrow",
+            # MCP server debug output
+            "Received CallToolRequest",
+            "Received ListToolsRequest",
+            "method: 'tools/call'",
+            "params: {",
+            "arguments: {"
         ]
 
         # If we see an MCP error pattern, start suppressing
@@ -98,7 +104,10 @@ class _SuppressingStderr:
                 "BaseExceptionGroup", "GeneratorExit", "anyio._backends._asyncio",
                 "mcp/client/stdio", "unhandled errors in a TaskGroup",
                 "Traceback", "RuntimeError", "Task exception was never retrieved",
-                "async_generator_athrow"
+                "async_generator_athrow",
+                # MCP server debug output
+                "Received CallToolRequest", "Received ListToolsRequest",
+                "method: 'tools/call'", "params: {", "arguments: {"
             ]
             if not any(pattern in self._buffer for pattern in mcp_error_patterns):
                 self._original.write(self._buffer)

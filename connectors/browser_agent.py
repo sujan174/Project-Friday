@@ -288,10 +288,16 @@ Remember: Be respectful, efficient, and accurate. Web automation is powerful - u
 
             # Create MCP server parameters for Playwright
             # Uses official Microsoft Playwright MCP via npx
+            env_vars = {**os.environ}
+            # Suppress MCP server debug output
+            if not self.verbose:
+                env_vars["DEBUG"] = ""
+                env_vars["NODE_ENV"] = "production"
+
             server_params = StdioServerParameters(
                 command="npx",
                 args=["-y", "@playwright/mcp"],
-                env=None
+                env=env_vars
             )
 
             # Connect to MCP server

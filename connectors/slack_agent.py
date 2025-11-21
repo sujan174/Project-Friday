@@ -772,14 +772,20 @@ Remember: Slack is the nervous system of distributed teams. Every message you cr
 
     def _create_server_params(self, bot_token: str, team_id: str) -> StdioServerParameters:
         """Create MCP server parameters"""
+        env_vars = {
+            **os.environ,
+            "SLACK_BOT_TOKEN": bot_token,
+            "SLACK_TEAM_ID": team_id
+        }
+        # Suppress MCP server debug output
+        if not self.verbose:
+            env_vars["DEBUG"] = ""
+            env_vars["NODE_ENV"] = "production"
+
         return StdioServerParameters(
             command="npx",
             args=["-y", "@modelcontextprotocol/server-slack"],
-            env={
-                **os.environ,
-                "SLACK_BOT_TOKEN": bot_token,
-                "SLACK_TEAM_ID": team_id
-            }
+            env=env_vars
         )
 
     async def _connect_to_mcp(self, server_params: StdioServerParameters):
