@@ -20,7 +20,7 @@ wheels/
 .installed.cfg
 *.egg
 data/
-
+testing/output
 # Virtual environments
 .venv/
 venv/
