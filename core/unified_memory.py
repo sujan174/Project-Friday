@@ -1020,20 +1020,33 @@ Keep each fact under 15 words. Be specific and actionable."""
         """Extract entities from message"""
         entities = []
 
+        # Emails (must come before mentions to capture full address)
+        emails = re.findall(r'\b([\w.-]+@[\w.-]+\.\w+)\b', message)
+        entities.extend(emails)
+
         # Jira issues
         jira = re.findall(r'\b([A-Z]{2,10}-\d+)\b', message)
         entities.extend(jira)
 
-        # Mentions
-        mentions = re.findall(r'@([\w.-]+)', message)
+        # Mentions (only @username without domain, not emails)
+        mentions = re.findall(r'(?<![.\w])@([\w.-]+)(?![\w.]*@)', message)
+        # Filter out mentions that are part of emails
+        email_parts = set()
+        for email in emails:
+            parts = email.split('@')
+            if len(parts) == 2:
+                email_parts.add(parts[1])  # domain
+        mentions = [m for m in mentions if m not in email_parts]
         entities.extend([f"@{m}" for m in mentions])
 
         # Channels
         channels = re.findall(r'#([\w-]+)', message)
         entities.extend([f"#{c}" for c in channels])
 
-        # Projects (uppercase)
+        # Projects (uppercase) - exclude if already captured as Jira prefix
+        jira_prefixes = set(j.split('-')[0] for j in jira)
         projects = re.findall(r'\b([A-Z]{2,5})\b(?!\s*-\d)', message)
+        projects = [p for p in projects if p not in jira_prefixes]
         entities.extend(projects)
 
         return entities
