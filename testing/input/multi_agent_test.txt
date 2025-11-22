@@ -1,0 +1,14 @@
+# Multi-Agent Test
+# Tests orchestrator's ability to route to different agents
+
+# Calendar queries
+What meetings do I have today?
+
+# Jira queries
+Show me my open tickets
+
+# Slack queries
+Show unread messages
+
+# General query
+Help me plan my day

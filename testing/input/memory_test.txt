@@ -1,0 +1,7 @@
+# Memory System Test
+# Tests conversation history and context retention
+
+My favorite color is blue
+What is my favorite color?
+Remember that I prefer dark mode
+What preferences do I have?
