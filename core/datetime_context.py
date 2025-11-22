@@ -14,6 +14,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional
 import zoneinfo
 
+from config import Config
+
 
 class DateTimeContext:
     """
@@ -108,6 +110,9 @@ class DateTimeContext:
         try:
             zoneinfo.ZoneInfo(tz_name)
             self._user_timezone = tz_name
+
+            # Also update Config.USER_TIMEZONE so all agents use the same timezone
+            Config.USER_TIMEZONE = tz_name
 
             if self.verbose:
                 print(f"[DATETIME] Set user timezone: {timezone_str} -> {tz_name}")
