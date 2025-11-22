@@ -107,8 +107,11 @@ class TestSession:
                 response = ""
                 error = None
 
+                tokens = {'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0}
                 try:
                     response = await self.orchestrator.process_message(query)
+                    # Get token usage for this message
+                    tokens = self.orchestrator.get_last_message_tokens()
                 except Exception as e:
                     success = False
                     error = str(e)
@@ -126,12 +129,14 @@ class TestSession:
                     "success": success,
                     "error": error,
                     "duration_seconds": round(query_end - query_start, 3),
-                    "timestamp": datetime.now().isoformat()
+                    "timestamp": datetime.now().isoformat(),
+                    "tokens": tokens
                 }
                 self.results.append(result)
 
                 if success:
-                    self._log(f"  -> Success ({result['duration_seconds']}s)")
+                    token_info = f", {tokens['total_tokens']} tokens" if tokens['total_tokens'] > 0 else ""
+                    self._log(f"  -> Success ({result['duration_seconds']}s{token_info})")
                 else:
                     self._log(f"  -> FAILED: {error}")
 
@@ -161,6 +166,13 @@ class TestSession:
         failed = total_queries - successful
         total_duration = self.end_time - self.start_time
 
+        # Calculate total tokens
+        total_tokens = {
+            'prompt_tokens': sum(r.get('tokens', {}).get('prompt_tokens', 0) for r in self.results),
+            'completion_tokens': sum(r.get('tokens', {}).get('completion_tokens', 0) for r in self.results),
+            'total_tokens': sum(r.get('tokens', {}).get('total_tokens', 0) for r in self.results)
+        }
+
         return {
             "test_name": self.session_name,
             "input_file": str(self.input_file),
@@ -171,7 +183,8 @@ class TestSession:
                 "total_queries": total_queries,
                 "successful": successful,
                 "failed": failed,
-                "success_rate": f"{(successful/total_queries*100):.1f}%" if total_queries > 0 else "N/A"
+                "success_rate": f"{(successful/total_queries*100):.1f}%" if total_queries > 0 else "N/A",
+                "total_tokens": total_tokens
             },
             "results": self.results
         }
@@ -278,6 +291,13 @@ class TestRunner:
         total_successful = sum(r['summary']['successful'] for r in successful_reports)
         total_failed = sum(r['summary']['failed'] for r in successful_reports)
 
+        # Calculate total tokens across all sessions
+        total_tokens = {
+            'prompt_tokens': sum(r['summary']['total_tokens']['prompt_tokens'] for r in successful_reports),
+            'completion_tokens': sum(r['summary']['total_tokens']['completion_tokens'] for r in successful_reports),
+            'total_tokens': sum(r['summary']['total_tokens']['total_tokens'] for r in successful_reports)
+        }
+
         summary = {
             "run_time": datetime.now().isoformat(),
             "total_duration_seconds": round(end_time - start_time, 3),
@@ -292,6 +312,7 @@ class TestRunner:
                 "failed": total_failed,
                 "success_rate": f"{(total_successful/total_queries*100):.1f}%" if total_queries > 0 else "N/A"
             },
+            "tokens": total_tokens,
             "failed_sessions": failed_sessions
         }
 
@@ -303,6 +324,7 @@ class TestRunner:
         print(f"  Sessions: {summary['sessions']['completed']}/{summary['sessions']['total']} completed")
         print(f"  Queries: {summary['queries']['successful']}/{summary['queries']['total']} successful")
         print(f"  Success Rate: {summary['queries']['success_rate']}")
+        print(f"  Total Tokens: {total_tokens['total_tokens']} (prompt: {total_tokens['prompt_tokens']}, completion: {total_tokens['completion_tokens']})")
 
         if failed_sessions:
             print(f"\n  Failed Sessions:")
