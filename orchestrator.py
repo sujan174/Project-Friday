@@ -123,6 +123,46 @@ class OrchestratorAgent:
             logger.error(f"Unexpected error extracting response: {e}", exc_info=True)
             return None
 
+    def _extract_token_usage(self, llm_response) -> Dict[str, int]:
+        """Extract token usage from LLM response metadata."""
+        tokens = {'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0}
+        try:
+            response = self._safe_get_response_object(llm_response)
+            if response and hasattr(response, 'usage_metadata'):
+                usage = response.usage_metadata
+                tokens['prompt_tokens'] = getattr(usage, 'prompt_token_count', 0) or 0
+                tokens['completion_tokens'] = getattr(usage, 'candidates_token_count', 0) or 0
+                tokens['total_tokens'] = getattr(usage, 'total_token_count', 0) or 0
+        except Exception as e:
+            if self.verbose:
+                print(f"{C.YELLOW}⚠ Could not extract token usage: {e}{C.ENDC}")
+        return tokens
+
+    def _track_tokens(self, llm_response):
+        """Track token usage from an LLM response."""
+        tokens = self._extract_token_usage(llm_response)
+        # Update cumulative totals
+        self.token_usage['prompt_tokens'] += tokens['prompt_tokens']
+        self.token_usage['completion_tokens'] += tokens['completion_tokens']
+        self.token_usage['total_tokens'] += tokens['total_tokens']
+        # Update last message totals
+        self.last_message_tokens['prompt_tokens'] += tokens['prompt_tokens']
+        self.last_message_tokens['completion_tokens'] += tokens['completion_tokens']
+        self.last_message_tokens['total_tokens'] += tokens['total_tokens']
+
+    def get_token_usage(self) -> Dict[str, int]:
+        """Get cumulative token usage for this session."""
+        return self.token_usage.copy()
+
+    def get_last_message_tokens(self) -> Dict[str, int]:
+        """Get token usage for the last processed message."""
+        return self.last_message_tokens.copy()
+
+    def reset_token_usage(self):
+        """Reset all token usage counters."""
+        self.token_usage = {'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0}
+        self.last_message_tokens = {'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0}
+
     def __init__(self, connectors_dir: str = "connectors", verbose: bool = False, llm: Optional[BaseLLM] = None):
         self.connectors_dir = Path(connectors_dir)
         self.sub_agents: Dict[str, Any] = {}
@@ -157,6 +197,18 @@ class OrchestratorAgent:
 
         # Feature #11: Simple progress tracking for streaming
         self.operation_count = 0  # Track number of operations in current request
+
+        # Token usage tracking
+        self.token_usage = {
+            'prompt_tokens': 0,
+            'completion_tokens': 0,
+            'total_tokens': 0
+        }
+        self.last_message_tokens = {
+            'prompt_tokens': 0,
+            'completion_tokens': 0,
+            'total_tokens': 0
+        }
 
         # SIMPLE SESSION LOGGER - 2 human-readable text files per session
         # This replaces the old SessionLogger and UnifiedSessionLogger
@@ -397,6 +449,34 @@ When delegating to an agent:
 - **Efficiency**: Minimize unnecessary agent calls while ensuring thoroughness
 - **Transparency**: Keep users informed of progress, especially for multi-step operations
 - **Error Recovery**: When errors occur, explain what went wrong clearly and suggest solutions
+
+# Multi-Step Operation Reporting
+
+When executing tasks that require multiple operations (e.g., "check calendar, create ticket, and notify channel"):
+
+1. **Always report ALL results**: Don't focus only on failures - report successes too
+2. **Structure your response clearly**:
+   - Start with what was successfully completed
+   - Then explain what failed and why
+   - End with suggested next steps
+
+**Example format for partial success**:
+```
+I've completed part of your request:
+
+✅ **Completed:**
+- Checked your calendar: You're free at 10am on Friday
+- Created Jira task KAN-42: "Weekly Sync"
+
+❌ **Could not complete:**
+- Notify #general channel: This channel is not available
+
+Would you like me to notify one of these available channels instead?
+- #dev-opps
+- #team-updates
+```
+
+**Never** report only the failure when other operations succeeded. Users need to know what was accomplished.
 
 # User Interaction Guidelines
 
@@ -1573,6 +1653,9 @@ Provide a clear instruction describing what you want to accomplish.""",
         # SIMPLE SESSION LOGGING - Log user message
         self.simple_logger.log_user_message(user_message)
 
+        # Reset per-message token tracking
+        self.last_message_tokens = {'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0}
+
         # ===================================================================
         # USER PREFERENCES & ANALYTICS TRACKING
         # ===================================================================
@@ -1813,6 +1896,9 @@ Provide a clear instruction describing what you want to accomplish.""",
         await self._spinner(send_task, "Thinking")
         llm_response = send_task.result()
 
+        # Track token usage
+        self._track_tokens(llm_response)
+
         # Get the raw response object for compatibility (with safety checks)
         response = self._safe_get_response_object(llm_response)
 
@@ -2038,6 +2124,9 @@ Provide a clear instruction describing what you want to accomplish.""",
             )
             await self._spinner(response_task, "Synthesizing results")
             llm_response = response_task.result()
+
+            # Track token usage
+            self._track_tokens(llm_response)
 
             # Get raw response for next iteration
             response = llm_response.metadata.get('response_object') if llm_response.metadata else None
