@@ -550,18 +550,22 @@ class UnifiedMemory:
         if not messages:
             return "Empty session"
 
-        # Build excerpt
+        # Build excerpt with more content and include responses
         excerpt = []
         for msg in messages[:5]:
-            excerpt.append(f"User: {msg['user'][:100]}")
+            user_msg = msg['user'][:300]
+            response_msg = msg.get('response', '')[:200]
+            excerpt.append(f"User: {user_msg}")
+            if response_msg:
+                excerpt.append(f"Assistant: {response_msg}")
 
-        prompt = f"""Summarize this conversation in 1-2 sentences.
-Focus on: what was requested, what was done.
+        prompt = f"""Summarize this conversation in 2-3 sentences.
+Focus on: what was requested, what was done, include specific details like names, emails, project names, ticket IDs.
 
 Messages:
 {chr(10).join(excerpt)}
 
-Keep under 50 words. Just the summary."""
+Keep under 75 words. Include specific identifiers mentioned. Just the summary."""
 
         try:
             response = await self.llm.generate(prompt)
@@ -601,13 +605,17 @@ Keep under 50 words. Just the summary."""
             ""
         ]
 
-        # Show first message for context
+        # Show key messages for context (not just first message)
         if last_session.get('user_messages'):
-            first = last_session['user_messages'][0][:100]
-            lines.append(f"  _Started with: \"{first}...\"_")
+            lines.append("  **Key messages from session:**")
+            for i, msg in enumerate(last_session['user_messages'][:5]):
+                # Show more of each message to capture important details
+                msg_preview = msg[:300] if len(msg) <= 300 else f"{msg[:300]}..."
+                lines.append(f"  - {msg_preview}")
+            lines.append("")
 
         if last_session.get('entities'):
-            lines.append(f"  _Entities: {', '.join(last_session['entities'][:5])}_")
+            lines.append(f"  _Entities: {', '.join(last_session['entities'][:10])}_")
 
         return "\n".join(lines)
 
@@ -711,8 +719,8 @@ Keep under 50 words. Just the summary."""
         intent_type: str
     ):
         """Store an episode for semantic search with deduplication"""
-        # Create summary for embedding
-        summary = f"User asked: {user_message[:150]}. Response: {response[:150]}"
+        # Create summary for embedding - use more chars to capture full details
+        summary = f"User asked: {user_message[:500]}. Response: {response[:500]}"
 
         # Get embedding
         embedding = await self._get_embedding(summary)
@@ -736,7 +744,7 @@ Keep under 50 words. Just the summary."""
                     existing_doc = similar['documents'][0][0]
 
                     # Update existing episode with merged info
-                    merged_summary = f"{existing_doc} | Also: {user_message[:100]}"
+                    merged_summary = f"{existing_doc} | Also: {user_message[:300]}"
                     merged_agents = existing_meta.get('agents', '')
                     if agents_used:
                         new_agents = ",".join(agents_used)
@@ -748,7 +756,7 @@ Keep under 50 words. Just the summary."""
                     # Update the existing episode
                     self.episodes.update(
                         ids=[existing_id],
-                        documents=[merged_summary[:500]],
+                        documents=[merged_summary[:1000]],
                         metadatas=[{
                             **existing_meta,
                             "agents": merged_agents,
@@ -773,7 +781,7 @@ Keep under 50 words. Just the summary."""
             "date": datetime.now().strftime("%Y-%m-%d"),
             "agents": ",".join(agents_used) if agents_used else "",
             "intent": intent_type,
-            "user_message": user_message[:200],
+            "user_message": user_message[:500],
             "merged_count": 1
         }
 
