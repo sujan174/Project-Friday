@@ -1,0 +1,6 @@
+# Basic Query Test
+# Tests fundamental orchestrator capabilities
+
+What time is it?
+What is my timezone?
+What agents are available?
