@@ -107,7 +107,7 @@ class TestSession:
                 response = ""
                 error = None
 
-                tokens = {'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0}
+                tokens = {'prompt_tokens': 0, 'cached_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0}
                 try:
                     response = await self.orchestrator.process_message(query)
                     # Get token usage for this message
@@ -169,6 +169,7 @@ class TestSession:
         # Calculate total tokens
         total_tokens = {
             'prompt_tokens': sum(r.get('tokens', {}).get('prompt_tokens', 0) for r in self.results),
+            'cached_tokens': sum(r.get('tokens', {}).get('cached_tokens', 0) for r in self.results),
             'completion_tokens': sum(r.get('tokens', {}).get('completion_tokens', 0) for r in self.results),
             'total_tokens': sum(r.get('tokens', {}).get('total_tokens', 0) for r in self.results)
         }
@@ -294,9 +295,20 @@ class TestRunner:
         # Calculate total tokens across all sessions
         total_tokens = {
             'prompt_tokens': sum(r['summary']['total_tokens']['prompt_tokens'] for r in successful_reports),
+            'cached_tokens': sum(r['summary']['total_tokens'].get('cached_tokens', 0) for r in successful_reports),
             'completion_tokens': sum(r['summary']['total_tokens']['completion_tokens'] for r in successful_reports),
             'total_tokens': sum(r['summary']['total_tokens']['total_tokens'] for r in successful_reports)
         }
+
+        # Calculate estimated cost (Gemini 2.5 Flash pricing)
+        # Cached input: $0.01875/1M, Standard input: $0.075/1M, Output: $0.30/1M
+        uncached_input = total_tokens['prompt_tokens'] - total_tokens['cached_tokens']
+        cost = {
+            'cached_input_cost': (total_tokens['cached_tokens'] / 1_000_000) * 0.01875,
+            'standard_input_cost': (uncached_input / 1_000_000) * 0.075,
+            'output_cost': (total_tokens['completion_tokens'] / 1_000_000) * 0.30,
+        }
+        cost['total_cost'] = cost['cached_input_cost'] + cost['standard_input_cost'] + cost['output_cost']
 
         summary = {
             "run_time": datetime.now().isoformat(),
@@ -313,6 +325,7 @@ class TestRunner:
                 "success_rate": f"{(total_successful/total_queries*100):.1f}%" if total_queries > 0 else "N/A"
             },
             "tokens": total_tokens,
+            "cost": {k: round(v, 6) for k, v in cost.items()},
             "failed_sessions": failed_sessions
         }
 
@@ -324,7 +337,10 @@ class TestRunner:
         print(f"  Sessions: {summary['sessions']['completed']}/{summary['sessions']['total']} completed")
         print(f"  Queries: {summary['queries']['successful']}/{summary['queries']['total']} successful")
         print(f"  Success Rate: {summary['queries']['success_rate']}")
-        print(f"  Total Tokens: {total_tokens['total_tokens']} (prompt: {total_tokens['prompt_tokens']}, completion: {total_tokens['completion_tokens']})")
+        print(f"  Tokens: {total_tokens['total_tokens']} total")
+        print(f"    - Prompt: {total_tokens['prompt_tokens']} (cached: {total_tokens['cached_tokens']})")
+        print(f"    - Completion: {total_tokens['completion_tokens']}")
+        print(f"  Estimated Cost: ${cost['total_cost']:.4f}")
 
         if failed_sessions:
             print(f"\n  Failed Sessions:")

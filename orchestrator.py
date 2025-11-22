@@ -125,12 +125,18 @@ class OrchestratorAgent:
 
     def _extract_token_usage(self, llm_response) -> Dict[str, int]:
         """Extract token usage from LLM response metadata."""
-        tokens = {'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0}
+        tokens = {
+            'prompt_tokens': 0,
+            'cached_tokens': 0,
+            'completion_tokens': 0,
+            'total_tokens': 0
+        }
         try:
             response = self._safe_get_response_object(llm_response)
             if response and hasattr(response, 'usage_metadata'):
                 usage = response.usage_metadata
                 tokens['prompt_tokens'] = getattr(usage, 'prompt_token_count', 0) or 0
+                tokens['cached_tokens'] = getattr(usage, 'cached_content_token_count', 0) or 0
                 tokens['completion_tokens'] = getattr(usage, 'candidates_token_count', 0) or 0
                 tokens['total_tokens'] = getattr(usage, 'total_token_count', 0) or 0
         except Exception as e:
@@ -143,10 +149,12 @@ class OrchestratorAgent:
         tokens = self._extract_token_usage(llm_response)
         # Update cumulative totals
         self.token_usage['prompt_tokens'] += tokens['prompt_tokens']
+        self.token_usage['cached_tokens'] += tokens['cached_tokens']
         self.token_usage['completion_tokens'] += tokens['completion_tokens']
         self.token_usage['total_tokens'] += tokens['total_tokens']
         # Update last message totals
         self.last_message_tokens['prompt_tokens'] += tokens['prompt_tokens']
+        self.last_message_tokens['cached_tokens'] += tokens['cached_tokens']
         self.last_message_tokens['completion_tokens'] += tokens['completion_tokens']
         self.last_message_tokens['total_tokens'] += tokens['total_tokens']
 
@@ -160,8 +168,8 @@ class OrchestratorAgent:
 
     def reset_token_usage(self):
         """Reset all token usage counters."""
-        self.token_usage = {'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0}
-        self.last_message_tokens = {'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0}
+        self.token_usage = {'prompt_tokens': 0, 'cached_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0}
+        self.last_message_tokens = {'prompt_tokens': 0, 'cached_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0}
 
     def __init__(self, connectors_dir: str = "connectors", verbose: bool = False, llm: Optional[BaseLLM] = None):
         self.connectors_dir = Path(connectors_dir)
@@ -201,11 +209,13 @@ class OrchestratorAgent:
         # Token usage tracking
         self.token_usage = {
             'prompt_tokens': 0,
+            'cached_tokens': 0,
             'completion_tokens': 0,
             'total_tokens': 0
         }
         self.last_message_tokens = {
             'prompt_tokens': 0,
+            'cached_tokens': 0,
             'completion_tokens': 0,
             'total_tokens': 0
         }
@@ -1654,7 +1664,7 @@ Provide a clear instruction describing what you want to accomplish.""",
         self.simple_logger.log_user_message(user_message)
 
         # Reset per-message token tracking
-        self.last_message_tokens = {'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0}
+        self.last_message_tokens = {'prompt_tokens': 0, 'cached_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0}
 
         # ===================================================================
         # USER PREFERENCES & ANALYTICS TRACKING
