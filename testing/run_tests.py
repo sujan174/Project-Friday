@@ -301,14 +301,41 @@ class TestRunner:
         }
 
         # Calculate estimated cost (Gemini 2.5 Flash pricing)
-        # Cached input: $0.01875/1M, Standard input: $0.075/1M, Output: $0.30/1M
-        uncached_input = total_tokens['prompt_tokens'] - total_tokens['cached_tokens']
-        cost = {
-            'cached_input_cost': (total_tokens['cached_tokens'] / 1_000_000) * 0.01875,
-            'standard_input_cost': (uncached_input / 1_000_000) * 0.075,
-            'output_cost': (total_tokens['completion_tokens'] / 1_000_000) * 0.30,
+        # Pricing per 1M tokens:
+        # - Standard input: $0.075
+        # - Cached input: $0.01875 (75% discount)
+        # - Output: $0.30
+
+        prompt_tokens = total_tokens['prompt_tokens']
+        cached_tokens = total_tokens['cached_tokens']
+        completion_tokens = total_tokens['completion_tokens']
+        uncached_input = prompt_tokens - cached_tokens
+
+        # Actual cost (with caching)
+        actual_cost = {
+            'cached_input': (cached_tokens / 1_000_000) * 0.01875,
+            'standard_input': (uncached_input / 1_000_000) * 0.075,
+            'output': (completion_tokens / 1_000_000) * 0.30,
         }
-        cost['total_cost'] = cost['cached_input_cost'] + cost['standard_input_cost'] + cost['output_cost']
+        actual_cost['total'] = actual_cost['cached_input'] + actual_cost['standard_input'] + actual_cost['output']
+
+        # Cost without caching (all input at standard rate)
+        no_cache_cost = {
+            'input': (prompt_tokens / 1_000_000) * 0.075,
+            'output': (completion_tokens / 1_000_000) * 0.30,
+        }
+        no_cache_cost['total'] = no_cache_cost['input'] + no_cache_cost['output']
+
+        # Savings from caching
+        savings = no_cache_cost['total'] - actual_cost['total']
+        savings_percent = (savings / no_cache_cost['total'] * 100) if no_cache_cost['total'] > 0 else 0
+
+        cost = {
+            'actual': {k: round(v, 6) for k, v in actual_cost.items()},
+            'without_cache': {k: round(v, 6) for k, v in no_cache_cost.items()},
+            'savings': round(savings, 6),
+            'savings_percent': round(savings_percent, 1)
+        }
 
         summary = {
             "run_time": datetime.now().isoformat(),
@@ -325,7 +352,7 @@ class TestRunner:
                 "success_rate": f"{(total_successful/total_queries*100):.1f}%" if total_queries > 0 else "N/A"
             },
             "tokens": total_tokens,
-            "cost": {k: round(v, 6) for k, v in cost.items()},
+            "cost": cost,
             "failed_sessions": failed_sessions
         }
 
@@ -337,10 +364,19 @@ class TestRunner:
         print(f"  Sessions: {summary['sessions']['completed']}/{summary['sessions']['total']} completed")
         print(f"  Queries: {summary['queries']['successful']}/{summary['queries']['total']} successful")
         print(f"  Success Rate: {summary['queries']['success_rate']}")
-        print(f"  Tokens: {total_tokens['total_tokens']} total")
-        print(f"    - Prompt: {total_tokens['prompt_tokens']} (cached: {total_tokens['cached_tokens']})")
-        print(f"    - Completion: {total_tokens['completion_tokens']}")
-        print(f"  Estimated Cost: ${cost['total_cost']:.4f}")
+        print(f"\n  Token Usage:")
+        print(f"    Total: {total_tokens['total_tokens']:,}")
+        print(f"    Prompt: {prompt_tokens:,} ({cached_tokens:,} cached, {uncached_input:,} uncached)")
+        print(f"    Completion: {completion_tokens:,}")
+        print(f"\n  Cost Analysis (Gemini 2.5 Flash):")
+        print(f"    Without caching: ${no_cache_cost['total']:.4f}")
+        print(f"      - Input ({prompt_tokens:,} tokens): ${no_cache_cost['input']:.4f}")
+        print(f"      - Output ({completion_tokens:,} tokens): ${no_cache_cost['output']:.4f}")
+        print(f"    With caching:    ${actual_cost['total']:.4f}")
+        print(f"      - Cached input ({cached_tokens:,} @ $0.01875/1M): ${actual_cost['cached_input']:.4f}")
+        print(f"      - Standard input ({uncached_input:,} @ $0.075/1M): ${actual_cost['standard_input']:.4f}")
+        print(f"      - Output ({completion_tokens:,} @ $0.30/1M): ${actual_cost['output']:.4f}")
+        print(f"    Savings: ${savings:.4f} ({savings_percent:.1f}%)")
 
         if failed_sessions:
             print(f"\n  Failed Sessions:")
