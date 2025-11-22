@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from enum import Enum
 from datetime import datetime
 from abc import ABC, abstractmethod
+import hashlib
 import json
 
 
@@ -536,6 +537,33 @@ class EntityGraph:
 
 
 # ============================================================================
+# CACHING TYPES
+# ============================================================================
+
+@dataclass
+class CacheEntry:
+    """Entry in cache"""
+    key: str
+    value: Any
+    created_at: datetime
+    last_accessed: datetime
+    access_count: int
+    ttl_seconds: Optional[float] = None
+
+    def is_expired(self) -> bool:
+        """Check if entry is expired"""
+        if self.ttl_seconds is None:
+            return False
+        age = (datetime.now() - self.created_at).total_seconds()
+        return age > self.ttl_seconds
+
+    def touch(self):
+        """Update last accessed time"""
+        self.last_accessed = datetime.now()
+        self.access_count += 1
+
+
+# ============================================================================
 # METRICS AND MONITORING TYPES
 # ============================================================================
 
@@ -672,3 +700,8 @@ class ValidationResult:
 def create_entity_id(entity: Entity) -> str:
     """Create unique ID for entity"""
     return f"{entity.type.value}:{entity.value}"
+
+
+def hash_content(content: str) -> str:
+    """Create hash of content for caching"""
+    return hashlib.sha256(content.encode()).hexdigest()[:16]
