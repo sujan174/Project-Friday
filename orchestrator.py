@@ -498,6 +498,33 @@ Would you like me to notify one of these available channels instead?
 - If you need more information, ask specific questions rather than generic ones
 - Respect user preferences and working styles as they emerge in conversation
 
+# Saving User Information
+
+When users share personal information, preferences, or settings, save them using the update_user_fact tool. This ensures you remember them in future conversations.
+
+**Always save when the user tells you:**
+- Their name ("I'm John", "My name is Sarah", "Call me Mike")
+- Their email ("My email is john@example.com", "mail me at...")
+- Their timezone ("I'm in EST", "Use PST", "My timezone is IST")
+- Preferences ("Always use dark mode", "I prefer bullet points")
+- Defaults ("My default project is PROJ-1", "Assign tickets to me by default")
+
+**Use the appropriate category:**
+- identity: name, email, role, title
+- preference: timezone, format, style
+- default: default_project, default_assignee
+- context: current_focus, active_project
+
+**Example usage:**
+- User says "I'm Alex" → call update_user_fact(action="add", key="user_name", value="Alex", category="identity")
+- User says "My email is alex@work.com" → call update_user_fact(action="add", key="user_email", value="alex@work.com", category="identity")
+- User says "me email is test@example.com" → call update_user_fact(action="add", key="user_email", value="test@example.com", category="identity")
+- User says "Use EST timezone" → call update_user_fact(action="add", key="timezone", value="EST", category="preference")
+
+**IMPORTANT**: When the user shares personal info like their email, you MUST call the update_user_fact tool. Do NOT respond with an error - use the tool to save the information.
+
+After saving, briefly confirm ("Got it, I'll remember that.") and continue with the conversation.
+
 # Safety and Limitations
 
 - Always confirm before taking irreversible actions (deletions, major changes, public posts)
@@ -1240,7 +1267,50 @@ Provide a clear instruction describing what you want to accomplish.""",
                 )
             )
             tools.append(tool)
-        
+
+        # Add update_user_fact tool for managing core facts
+        update_fact_tool = protos.FunctionDeclaration(
+            name="update_user_fact",
+            description="""Save, update, or remove user information like name, email, timezone, or preferences.
+
+Use this tool when the user:
+- Tells you their name, email, or other personal info
+- Wants to change their timezone or preferences
+- Asks you to remember something about them
+- Wants you to forget/remove a saved fact
+
+Actions:
+- "add": Save a new fact or update existing
+- "remove": Delete a saved fact""",
+            parameters=protos.Schema(
+                type_=protos.Type.OBJECT,
+                properties={
+                    "action": protos.Schema(
+                        type_=protos.Type.STRING,
+                        description="Action to perform: 'add' or 'remove'"
+                    ),
+                    "key": protos.Schema(
+                        type_=protos.Type.STRING,
+                        description="Fact key (e.g., 'user_name', 'user_email', 'timezone')"
+                    ),
+                    "value": protos.Schema(
+                        type_=protos.Type.STRING,
+                        description="Fact value (required for 'add' action)"
+                    ),
+                    "category": protos.Schema(
+                        type_=protos.Type.STRING,
+                        description="Category: 'identity' (name/email), 'preference' (timezone/format), 'default' (project/assignee), 'context' (current focus)"
+                    )
+                },
+                required=["action", "key"]
+            )
+        )
+        tools.append(update_fact_tool)
+
+        if self.verbose:
+            tool_names = [t.name for t in tools]
+            print(f"{C.CYAN}🔧 Created {len(tools)} tools: {', '.join(tool_names)}{C.ENDC}")
+
         return tools
     
     async def call_sub_agent(self, agent_name: str, instruction: str, context: Any = None) -> str:
@@ -1801,6 +1871,31 @@ Provide a clear instruction describing what you want to accomplish.""",
                                 instruction_confirmation = f"👤 Name set to {detected_name}"
                             break
 
+        # Fallback email detection
+        if hasattr(self, 'unified_memory'):
+            # Look for email patterns in user message
+            email_patterns = [
+                r"(?:my email is|my mail is|email me at|mail me at|reach me at)\s*([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})",
+                r"(?:email|mail)\s+(?:is\s+)?([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})",
+            ]
+            print(f"{C.YELLOW}[DEBUG] Checking email patterns in: '{user_message}'{C.ENDC}")
+            email_found = False
+            for i, pattern in enumerate(email_patterns):
+                match = re.search(pattern, user_message, re.IGNORECASE)
+                if match:
+                    detected_email = match.group(1).strip().lower()
+                    print(f"{C.GREEN}[DEBUG] Pattern {i+1} matched! Email: {detected_email}{C.ENDC}")
+                    self.unified_memory.set_core_fact('user_email', detected_email, 'identity', 'pattern_fallback')
+                    print(f"{C.GREEN}[DEBUG] Email saved to core_facts and flushed to disk{C.ENDC}")
+                    if self.verbose:
+                        print(f"{C.CYAN}📧 Email detected (fallback): {detected_email}{C.ENDC}")
+                    if not instruction_confirmation:
+                        instruction_confirmation = f"📧 Email set to {detected_email}"
+                    email_found = True
+                    break
+            if not email_found:
+                print(f"{C.YELLOW}[DEBUG] No email pattern matched{C.ENDC}")
+
         # ===================================================================
 
         # Initialize on first message
@@ -1931,8 +2026,9 @@ Provide a clear instruction describing what you want to accomplish.""",
             )
             
             if not has_function_call:
+                print(f"{C.YELLOW}[DEBUG] No function call in response, breaking loop{C.ENDC}")
                 break
-            
+
             # Get the function call
             function_call = None
             for part in parts:
@@ -1942,9 +2038,10 @@ Provide a clear instruction describing what you want to accomplish.""",
             
             if not function_call:
                 break
-            
+
             tool_name = function_call.name
-            
+            print(f"{C.CYAN}[DEBUG] Function call received: {tool_name}{C.ENDC}")
+
             # Extract agent name from tool name (use_X_agent -> X)
             if tool_name.startswith("use_") and tool_name.endswith("_agent"):
                 agent_name = tool_name[4:-6]  # Remove "use_" and "_agent"
@@ -1953,7 +2050,67 @@ Provide a clear instruction describing what you want to accomplish.""",
             
             # Convert protobuf args to dict
             args = self._deep_convert_proto_args(function_call.args)
-            
+
+            # Handle update_user_fact tool (not an agent call)
+            if tool_name == "update_user_fact":
+                if self.verbose:
+                    print(f"{C.CYAN}🔧 update_user_fact tool called{C.ENDC}")
+
+                action = args.get("action", "add")
+                key = args.get("key", "")
+                value = args.get("value", "")
+                category = args.get("category", "identity")
+
+                try:
+                    if action == "add":
+                        if not key or not value:
+                            result = "Error: Both 'key' and 'value' are required for add action"
+                        else:
+                            self.unified_memory.set_core_fact(
+                                key=key,
+                                value=value,
+                                category=category,
+                                source="user"
+                            )
+                            result = f"Saved: {key} = {value}"
+                            if self.verbose:
+                                print(f"{C.GREEN}✓ Stored fact: {key} = {value}{C.ENDC}")
+                    elif action == "remove":
+                        if not key:
+                            result = "Error: 'key' is required for remove action"
+                        else:
+                            removed = self.unified_memory.remove_core_fact(key)
+                            result = f"Removed: {key}" if removed else f"Fact '{key}' not found"
+                            if self.verbose:
+                                print(f"{C.GREEN}✓ Removed fact: {key}{C.ENDC}" if removed else f"{C.YELLOW}⚠ Fact not found: {key}{C.ENDC}")
+                    else:
+                        result = f"Error: Unknown action '{action}'. Use 'add' or 'remove'"
+
+                except Exception as e:
+                    result = f"Error updating fact: {str(e)}"
+                    if self.verbose:
+                        print(f"{C.RED}✗ {result}{C.ENDC}")
+
+                # Send function response back to LLM using the same pattern as agent calls
+                function_result = {
+                    'name': tool_name,
+                    'result': result
+                }
+
+                response_task = asyncio.create_task(
+                    self.chat.send_message_with_functions("", function_result)
+                )
+                await self._spinner(response_task, "Saving user info")
+                llm_response = response_task.result()
+
+                # Track token usage
+                self._track_tokens(llm_response)
+
+                # Get raw response for next iteration
+                response = llm_response.metadata.get('response_object') if llm_response.metadata else None
+                iteration += 1
+                continue
+
             instruction = args.get("instruction", "")
             context = args.get("context", "") # This will be a dict/list if passed by LLM
 

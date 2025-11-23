@@ -35,8 +35,8 @@ class IntelligentInstructionParser:
     """
 
     # Categories of instructions we support
+    # Note: 'identity' and 'timezone' are now handled by orchestrator's update_user_fact tool
     INSTRUCTION_CATEGORIES = [
-        'timezone',      # Time zone preferences
         'default',       # Default values (project, assignee, channel)
         'behavior',      # Behavioral rules (always/never do X)
         'formatting',    # Output formatting preferences
@@ -47,7 +47,6 @@ class IntelligentInstructionParser:
 
     # Known instruction keys for validation
     KNOWN_KEYS = {
-        'timezone': ['timezone'],
         'default': ['default_project', 'default_assignee', 'default_channel', 'default_priority', 'default_repository'],
         'behavior': ['always', 'never', 'confirm_before', 'auto_approve'],
         'formatting': ['verbosity', 'format_style', 'use_emojis', 'language'],
@@ -151,22 +150,17 @@ class IntelligentInstructionParser:
         message_lower = message.lower()
 
         # Strong instruction indicators - if present, likely an instruction
+        # Note: Identity (name, email) and timezone are now handled by orchestrator's update_user_fact tool
         strong_indicators = [
-            'timezone', 'time zone', 'default project', 'default assignee',
+            'default project', 'default assignee',
             'from now on', 'from now', 'remember that', 'always use', 'never use',
             'my preference', 'set my', 'change my',
-            # Timezone phrases
-            'indian time', 'pacific time', 'eastern time', 'central time',
-            'mountain time', 'british time', 'tokyo time', 'japan time',
-            'use ist', 'use est', 'use pst', 'use gmt', 'use jst'
         ]
 
         if any(indicator in message_lower for indicator in strong_indicators):
             return True
 
-        # Pattern: "use X time" where X could be a timezone
-        if 'use' in message_lower and 'time' in message_lower:
-            return True
+        # Note: Timezone patterns removed - handled by orchestrator's update_user_fact tool
 
         # Weak indicators - need multiple to trigger
         weak_indicators = ['remember', 'always', 'never', 'default', 'prefer',
@@ -191,10 +185,6 @@ class IntelligentInstructionParser:
         if '?' in message:
             return False
 
-        # Check for "change to X time" pattern
-        if 'change' in message_lower and 'time' in message_lower:
-            return True
-
         return False
 
     async def _parse_with_llm(self, message: str) -> ParsedInstruction:
@@ -205,20 +195,19 @@ class IntelligentInstructionParser:
 Message: "{message}"
 
 INSTRUCTIONS (remember permanently):
-- Timezone: "use EST", "indian time", "change to pacific"
 - Defaults: "default project is X", "always assign to Y"
 - Rules: "always X", "never Y", "confirm before deleting"
 - Preferences: "be concise", "use emojis", "verbose responses"
+- Workflow: "auto-approve PRs", "notify me on failures"
 
 NOT INSTRUCTIONS (don't remember):
 - Questions: "what time?", "show me X"
 - Actions: "create issue", "send message"
 - One-time requests
-
-If instruction, extract the setting. For timezones, convert to standard abbreviation (EST, PST, IST, GMT, JST, etc).
+- Identity info (name, email, timezone) - these are handled separately
 
 JSON response only:
-{{"is_instruction":true/false,"category":"timezone|default|behavior|formatting","key":"setting_name","value":"setting_value","confidence":0.0-1.0,"reasoning":"brief"}}"""
+{{"is_instruction":true/false,"category":"default|behavior|formatting|workflow","key":"setting_name","value":"setting_value","confidence":0.0-1.0,"reasoning":"brief"}}"""
 
         try:
             # Use the LLM to parse
@@ -253,40 +242,59 @@ JSON response only:
     def _parse_with_heuristics(self, message: str) -> ParsedInstruction:
         """
         Minimal fallback when LLM is unavailable.
+        CONSERVATIVE: Default to NOT storing as instruction when uncertain.
         Only handles the most obvious patterns - LLM should be primary.
         """
+        import re
         message_lower = message.lower().strip()
 
-        # Only detect if it looks like an instruction (has key indicators)
-        instruction_keywords = ['remember', 'always', 'never', 'default', 'from now on',
-                               'change', 'set', 'switch', 'use', 'timezone', 'prefer']
+        # Strong instruction indicators that are unambiguous
+        # Note: Identity (name, email) and timezone patterns are handled by orchestrator's update_user_fact tool
+        strong_instruction_patterns = [
+            'from now on', 'remember that', 'always use', 'never use',
+            'default project is', 'default assignee is',
+        ]
 
-        has_indicator = any(kw in message_lower for kw in instruction_keywords)
+        has_strong_indicator = any(pattern in message_lower for pattern in strong_instruction_patterns)
 
         # Exclude if it's clearly a question or action
-        is_question = '?' in message or any(w in message_lower.split()[:2]
-                                            for w in ['what', 'how', 'show', 'create', 'list'])
+        is_question = '?' in message
+        is_action = any(message_lower.startswith(p) for p in
+                       ['check ', 'create ', 'send ', 'get ', 'show ', 'list ', 'schedule '])
 
-        if not has_indicator or is_question:
+        if is_action or is_question:
             return ParsedInstruction(
                 is_instruction=False,
                 category='',
                 key='',
                 value='',
                 original_message=message,
-                confidence=0.8,
-                reasoning="No instruction indicators found (heuristic fallback)"
+                confidence=0.9,
+                reasoning="Detected as action/question, not instruction (heuristic)"
             )
 
-        # Basic extraction - let user know LLM should handle this
+        # Only store if we have a STRONG indicator
+        # Note: Identity (name, email) and timezone extraction removed - handled by orchestrator's update_user_fact tool
+        if has_strong_indicator:
+            return ParsedInstruction(
+                is_instruction=True,
+                category='default',
+                key='preference',
+                value=message,
+                original_message=message,
+                confidence=0.6,
+                reasoning="Detected instruction pattern (heuristic)"
+            )
+
+        # DEFAULT: Be conservative - don't store as instruction when uncertain
         return ParsedInstruction(
-            is_instruction=True,
-            category='default',
-            key='instruction',
-            value=message,  # Store raw message, needs manual review
+            is_instruction=False,
+            category='',
+            key='',
+            value='',
             original_message=message,
-            confidence=0.5,
-            reasoning="Detected as instruction but needs LLM for proper parsing"
+            confidence=0.7,
+            reasoning="Uncertain - defaulting to not storing (heuristic fallback)"
         )
 
     def get_statistics(self) -> Dict:

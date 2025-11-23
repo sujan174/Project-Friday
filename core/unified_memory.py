@@ -221,6 +221,16 @@ class UnifiedMemory:
             return self.core_facts[key].value
         return None
 
+    def remove_core_fact(self, key: str) -> bool:
+        """Remove a core fact by key. Returns True if removed, False if not found."""
+        if key in self.core_facts:
+            del self.core_facts[key]
+            self._core_facts_dirty = True
+            if self.verbose:
+                print(f"[CORE FACT] Removed {key}")
+            return True
+        return False
+
     def get_always_context(self) -> str:
         """
         Get context that should ALWAYS be injected.
@@ -785,13 +795,13 @@ Keep under 75 words. Include specific identifiers mentioned. Just the summary.""
                 f"{episode['user_message']}{episode['timestamp']}".encode()
             ).hexdigest()[:16]
 
-            # Metadata
+            # Metadata - ChromaDB doesn't accept None values
             metadata = {
                 "timestamp": episode['timestamp'],
                 "date": datetime.fromtimestamp(episode['timestamp']).strftime("%Y-%m-%d"),
                 "agents": ",".join(episode['agents_used']) if episode['agents_used'] else "",
-                "intent": episode['intent_type'],
-                "user_message": episode['user_message'],
+                "intent": episode['intent_type'] if episode['intent_type'] else "",
+                "user_message": episode['user_message'] if episode['user_message'] else "",
                 "merged_count": 1
             }
 
