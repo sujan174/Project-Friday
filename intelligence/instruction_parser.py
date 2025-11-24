@@ -149,32 +149,35 @@ class IntelligentInstructionParser:
         """
         message_lower = message.lower()
 
-        # Strong instruction indicators - if present, likely an instruction
-        # Note: Identity (name, email) and timezone are now handled by orchestrator's update_user_fact tool
+        # Skip patterns handled by update_user_fact tool - don't waste LLM calls
+        # These include: identity, timezone, defaults
+        skip_patterns = ['default project', 'default assignee', 'my name is', 'i am ',
+                        'my email', 'my mail', 'timezone', 'time zone',
+                        'use est', 'use pst', 'use ist', 'use utc', 'use gmt']
+        if any(pattern in message_lower for pattern in skip_patterns):
+            return False
+
+        # Strong instruction indicators - behavioral/workflow patterns only
+        # Note: Identity, timezone, and defaults are handled by orchestrator's update_user_fact tool
         strong_indicators = [
-            'default project', 'default assignee',
             'from now on', 'from now', 'remember that', 'always use', 'never use',
-            'my preference', 'set my', 'change my',
+            'my preference', 'always confirm', 'never send', 'be concise', 'be verbose',
         ]
 
         if any(indicator in message_lower for indicator in strong_indicators):
             return True
 
-        # Note: Timezone patterns removed - handled by orchestrator's update_user_fact tool
-
         # Weak indicators - need multiple to trigger
-        weak_indicators = ['remember', 'always', 'never', 'default', 'prefer',
-                          'change', 'set', 'switch', 'use']
+        weak_indicators = ['remember', 'always', 'never', 'prefer']
 
-        # Setting-related words
-        setting_words = ['timezone', 'project', 'assignee', 'channel',
-                        'verbose', 'concise', 'format', 'style']
+        # Behavioral/formatting words (not identity/defaults)
+        behavior_words = ['verbose', 'concise', 'format', 'style', 'confirm', 'notify']
 
         weak_count = sum(1 for w in weak_indicators if w in message_lower)
-        setting_count = sum(1 for w in setting_words if w in message_lower)
+        behavior_count = sum(1 for w in behavior_words if w in message_lower)
 
-        # Need at least one weak indicator AND one setting word
-        if weak_count >= 1 and setting_count >= 1:
+        # Need at least one weak indicator AND one behavior word
+        if weak_count >= 1 and behavior_count >= 1:
             return True
 
         # Quick exclusions - definitely not instructions
@@ -249,13 +252,14 @@ JSON response only:
         message_lower = message.lower().strip()
 
         # Strong instruction indicators that are unambiguous
-        # Note: Identity (name, email) and timezone patterns are handled by orchestrator's update_user_fact tool
-        strong_instruction_patterns = [
+        # Note: Identity (name, email), timezone, and defaults are handled by orchestrator's update_user_fact tool
+        # Only behavioral/workflow patterns should be handled here
+        behavioral_patterns = [
             'from now on', 'remember that', 'always use', 'never use',
-            'default project is', 'default assignee is',
+            'always confirm', 'never send', 'be concise', 'be verbose',
         ]
 
-        has_strong_indicator = any(pattern in message_lower for pattern in strong_instruction_patterns)
+        has_behavioral_indicator = any(pattern in message_lower for pattern in behavioral_patterns)
 
         # Exclude if it's clearly a question or action
         is_question = '?' in message
@@ -273,17 +277,45 @@ JSON response only:
                 reasoning="Detected as action/question, not instruction (heuristic)"
             )
 
-        # Only store if we have a STRONG indicator
-        # Note: Identity (name, email) and timezone extraction removed - handled by orchestrator's update_user_fact tool
-        if has_strong_indicator:
+        # Skip patterns handled by update_user_fact tool
+        # These include: default project, default assignee, timezone, name, email
+        skip_patterns = ['default project', 'default assignee', 'my name is', 'my email',
+                        'timezone', 'time zone', 'use est', 'use pst', 'use ist', 'use utc']
+        if any(pattern in message_lower for pattern in skip_patterns):
+            return ParsedInstruction(
+                is_instruction=False,
+                category='',
+                key='',
+                value='',
+                original_message=message,
+                confidence=0.8,
+                reasoning="Handled by update_user_fact tool, not instruction parser (heuristic)"
+            )
+
+        # Only store behavioral/workflow instructions
+        if has_behavioral_indicator:
+            # Try to extract a meaningful key
+            key = 'behavior'
+            category = 'behavior'
+
+            if 'concise' in message_lower:
+                key = 'response_style'
+                category = 'formatting'
+            elif 'verbose' in message_lower:
+                key = 'response_style'
+                category = 'formatting'
+            elif 'confirm' in message_lower:
+                key = 'confirm_before_action'
+                category = 'behavior'
+
             return ParsedInstruction(
                 is_instruction=True,
-                category='default',
-                key='preference',
+                category=category,
+                key=key,
                 value=message,
                 original_message=message,
                 confidence=0.6,
-                reasoning="Detected instruction pattern (heuristic)"
+                reasoning="Detected behavioral instruction pattern (heuristic)"
             )
 
         # DEFAULT: Be conservative - don't store as instruction when uncertain

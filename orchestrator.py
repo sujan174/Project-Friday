@@ -1782,30 +1782,27 @@ Actions:
                     if set_user_timezone(parsed_instruction.value):
                         if self.verbose:
                             print(f"{C.CYAN}🕐 Global timezone set to: {parsed_instruction.value}{C.ENDC}")
-                        # Store in unified memory as core fact
+                        # Store in unified memory as core fact (NOT in instruction_memory to avoid duplication)
                         if hasattr(self, 'unified_memory'):
                             self.unified_memory.set_core_fact('timezone', parsed_instruction.value, 'preference', 'explicit')
-                        # Clear confirmation for timezone - will be shown via context
                         instruction_confirmation = f"🕐 Timezone set to {parsed_instruction.value}"
-                        self.instruction_memory.add(parsed_instruction)
                 elif parsed_instruction.category == 'identity' and parsed_instruction.value:
-                    # Store identity information (name, role, etc.)
+                    # Store identity information (name, role, etc.) in core_facts only
                     if hasattr(self, 'unified_memory'):
                         key = parsed_instruction.key or 'user_name'
                         self.unified_memory.set_core_fact(key, parsed_instruction.value, 'identity', 'explicit')
                         instruction_confirmation = f"👤 {key.replace('_', ' ').title()} set to {parsed_instruction.value}"
                         if self.verbose:
                             print(f"{C.CYAN}👤 Identity saved: {key} = {parsed_instruction.value}{C.ENDC}")
-                    self.instruction_memory.add(parsed_instruction)
                 elif parsed_instruction.category == 'default' and parsed_instruction.key and parsed_instruction.value:
-                    # Store default values (project, assignee, etc.)
+                    # Store default values in core_facts only (NOT in instruction_memory)
                     if hasattr(self, 'unified_memory'):
                         self.unified_memory.set_core_fact(parsed_instruction.key, parsed_instruction.value, 'default', 'explicit')
+                        instruction_confirmation = f"📋 Default set: {parsed_instruction.key} = {parsed_instruction.value}"
                         if self.verbose:
                             print(f"{C.CYAN}📋 Default saved: {parsed_instruction.key} = {parsed_instruction.value}{C.ENDC}")
-                    self.instruction_memory.add(parsed_instruction)
                 else:
-                    # Store in instruction memory for other instructions
+                    # Store in instruction memory ONLY for behavioral/workflow/formatting instructions
                     self.instruction_memory.add(parsed_instruction)
 
                     # Generate confirmation for other instruction types

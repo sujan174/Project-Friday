@@ -49,10 +49,6 @@ logs/*
 .env
 .env.local
 
-# Data
-data/*.json
-!data/.gitkeep
-
 # Cache
 .cache/
 .pytest_cache/
