@@ -157,22 +157,36 @@ class UnifiedMemory:
 
     def _init_vector_store(self):
         """Initialize ChromaDB for semantic search"""
-        self.chroma_client = chromadb.PersistentClient(
-            path=f"{self.storage_dir}/chroma",
-            settings=Settings(anonymized_telemetry=False)
-        )
+        try:
+            self.chroma_client = chromadb.PersistentClient(
+                path=f"{self.storage_dir}/chroma",
+                settings=Settings(anonymized_telemetry=False)
+            )
 
-        # Episodes collection
-        self.episodes = self.chroma_client.get_or_create_collection(
-            name="episodes",
-            metadata={"hnsw:space": "cosine"}
-        )
+            # Episodes collection
+            self.episodes = self.chroma_client.get_or_create_collection(
+                name="episodes",
+                metadata={"hnsw:space": "cosine"}
+            )
 
-        # Facts collection (for semantic search on consolidated facts)
-        self.facts_collection = self.chroma_client.get_or_create_collection(
-            name="facts",
-            metadata={"hnsw:space": "cosine"}
-        )
+            # Facts collection (for semantic search on consolidated facts)
+            self.facts_collection = self.chroma_client.get_or_create_collection(
+                name="facts",
+                metadata={"hnsw:space": "cosine"}
+            )
+        except Exception as e:
+            if self.verbose:
+                print(f"[MEMORY] ChromaDB initialization failed: {e}")
+            # Create fallback in-memory client
+            self.chroma_client = chromadb.Client()
+            self.episodes = self.chroma_client.get_or_create_collection(
+                name="episodes",
+                metadata={"hnsw:space": "cosine"}
+            )
+            self.facts_collection = self.chroma_client.get_or_create_collection(
+                name="facts",
+                metadata={"hnsw:space": "cosine"}
+            )
 
     # =========================================================================
     # CORE FACTS (Always Tier)
@@ -237,41 +251,57 @@ class UnifiedMemory:
 
         This is the minimal, essential context.
         """
-        if not self.core_facts:
+        try:
+            if not self.core_facts:
+                return ""
+
+            lines = ["# User Context", ""]
+
+            # Group by category
+            by_category = defaultdict(list)
+            for key, fact in self.core_facts.items():
+                try:
+                    by_category[fact.category].append(fact)
+                except (AttributeError, TypeError) as e:
+                    if self.verbose:
+                        print(f"[MEMORY] Malformed core fact '{key}': {e}")
+                    continue
+
+            # Sort categories by importance
+            category_order = ["identity", "preference", "default", "context"]
+
+            for category in category_order:
+                if category in by_category:
+                    facts = by_category[category]
+                    for fact in sorted(facts, key=lambda f: -f.importance):
+                        try:
+                            # Special formatting to make preferences actionable
+                            if fact.key == 'communication_style':
+                                if fact.value == 'concise':
+                                    lines.append(f"- **{fact.key}**: {fact.value} - Keep responses brief and to the point")
+                                elif fact.value == 'verbose':
+                                    lines.append(f"- **{fact.key}**: {fact.value} - Provide detailed explanations")
+                                else:
+                                    lines.append(f"- **{fact.key}**: {fact.value}")
+                            elif 'confirmation' in fact.key:
+                                # Only include if true (false is default behavior, wastes tokens)
+                                if fact.value == 'true':
+                                    action_type = fact.key.replace('_confirmation', '').replace('_', ' ')
+                                    lines.append(f"- **{fact.key}**: {fact.value} - ALWAYS ask for confirmation before {action_type} actions")
+                                # Skip false values entirely
+                            else:
+                                lines.append(f"- **{fact.key}**: {fact.value}")
+                        except (AttributeError, TypeError) as e:
+                            if self.verbose:
+                                print(f"[MEMORY] Error formatting fact: {e}")
+                            continue
+
+            return "\n".join(lines)
+
+        except Exception as e:
+            if self.verbose:
+                print(f"[MEMORY] get_always_context failed: {e}")
             return ""
-
-        lines = ["# User Context", ""]
-
-        # Group by category
-        by_category = defaultdict(list)
-        for key, fact in self.core_facts.items():
-            by_category[fact.category].append(fact)
-
-        # Sort categories by importance
-        category_order = ["identity", "preference", "default", "context"]
-
-        for category in category_order:
-            if category in by_category:
-                facts = by_category[category]
-                for fact in sorted(facts, key=lambda f: -f.importance):
-                    # Special formatting to make preferences actionable
-                    if fact.key == 'communication_style':
-                        if fact.value == 'concise':
-                            lines.append(f"- **{fact.key}**: {fact.value} - Keep responses brief and to the point")
-                        elif fact.value == 'verbose':
-                            lines.append(f"- **{fact.key}**: {fact.value} - Provide detailed explanations")
-                        else:
-                            lines.append(f"- **{fact.key}**: {fact.value}")
-                    elif 'confirmation' in fact.key:
-                        # Only include if true (false is default behavior, wastes tokens)
-                        if fact.value == 'true':
-                            action_type = fact.key.replace('_confirmation', '').replace('_', ' ')
-                            lines.append(f"- **{fact.key}**: {fact.value} - ALWAYS ask for confirmation before {action_type} actions")
-                        # Skip false values entirely
-                    else:
-                        lines.append(f"- **{fact.key}**: {fact.value}")
-
-        return "\n".join(lines)
 
     # =========================================================================
     # MEMORY INTENT DETECTION
@@ -284,146 +314,218 @@ class UnifiedMemory:
         This determines if we need to do expensive retrieval.
         Also resolves entity coreferences ("that ticket" → "KAN-123").
         """
-        message_lower = message.lower()
+        try:
+            message_lower = message.lower()
 
-        # Recall patterns - user is asking about past interactions
-        recall_patterns = [
-            (r'\bwhat did we (discuss|talk about|do)\b', 'RECALL'),
-            (r'\blast (time|session|conversation)\b', 'RECALL'),
-            (r'\byesterday\b.*\b(we|i)\b', 'RECALL'),
-            (r'\bremember when\b', 'RECALL'),
-            (r'\bearlier (today|we)\b', 'RECALL'),
-            (r'\bwhat was (that|the)\b', 'RECALL'),
-            (r'\bcan you recall\b', 'RECALL'),
-            (r'\bwe (discussed|talked about|mentioned)\b', 'RECALL'),
-        ]
+            # Recall patterns - user is asking about past interactions
+            recall_patterns = [
+                (r'\bwhat did we (discuss|talk about|do)\b', 'RECALL'),
+                (r'\blast (time|session|conversation)\b', 'RECALL'),
+                (r'\byesterday\b.*\b(we|i)\b', 'RECALL'),
+                (r'\bremember when\b', 'RECALL'),
+                (r'\bearlier (today|we)\b', 'RECALL'),
+                (r'\bwhat was (that|the)\b', 'RECALL'),
+                (r'\bcan you recall\b', 'RECALL'),
+                (r'\bwe (discussed|talked about|mentioned)\b', 'RECALL'),
+            ]
 
-        # Reference patterns - user is referring to something from context
-        reference_patterns = [
-            (r'\bthat (ticket|issue|pr|project|one)\b', 'REFERENCE'),
-            (r'\bthe (ticket|issue|pr|project)\b', 'REFERENCE'),
-            (r'\bthe one (we|i)\b', 'REFERENCE'),
-            (r'\bthe same\b', 'REFERENCE'),
-            (r'\b(this|that) again\b', 'REFERENCE'),
-            (r'\bit\b', 'REFERENCE'),  # Pronoun reference
-        ]
+            # Reference patterns - user is referring to something from context
+            reference_patterns = [
+                (r'\bthat (ticket|issue|pr|project|one)\b', 'REFERENCE'),
+                (r'\bthe (ticket|issue|pr|project)\b', 'REFERENCE'),
+                (r'\bthe one (we|i)\b', 'REFERENCE'),
+                (r'\bthe same\b', 'REFERENCE'),
+                (r'\b(this|that) again\b', 'REFERENCE'),
+                (r'\bit\b', 'REFERENCE'),  # Pronoun reference
+            ]
 
-        # Check recall patterns
-        for pattern, intent_type in recall_patterns:
-            if re.search(pattern, message_lower):
-                # Extract time reference
-                time_ref = self._extract_time_reference(message_lower)
+            # Check recall patterns
+            for pattern, intent_type in recall_patterns:
+                try:
+                    if re.search(pattern, message_lower):
+                        # Extract time reference
+                        time_ref = self._extract_time_reference(message_lower)
 
-                return MemoryQuery(
-                    intent_type=MemoryIntentType.RECALL,
-                    query_text=message,
-                    time_reference=time_ref,
-                    entity_references=[],
-                    confidence=0.85
-                )
+                        return MemoryQuery(
+                            intent_type=MemoryIntentType.RECALL,
+                            query_text=message,
+                            time_reference=time_ref,
+                            entity_references=[],
+                            confidence=0.85
+                        )
+                except re.error as e:
+                    if self.verbose:
+                        print(f"[MEMORY] Regex error in recall pattern: {e}")
+                    continue
 
-        # Check reference patterns and resolve coreferences
-        for pattern, intent_type in reference_patterns:
-            match = re.search(pattern, message_lower)
-            if match:
-                # Resolve the reference to actual entities
-                resolved_entities = self._resolve_coreference(message_lower, match)
+            # Check reference patterns and resolve coreferences
+            for pattern, intent_type in reference_patterns:
+                try:
+                    match = re.search(pattern, message_lower)
+                    if match:
+                        # Resolve the reference to actual entities
+                        resolved_entities = self._resolve_coreference(message_lower, match)
 
-                return MemoryQuery(
-                    intent_type=MemoryIntentType.REFERENCE,
-                    query_text=message,
-                    time_reference=None,
-                    entity_references=resolved_entities,
-                    confidence=0.75 if resolved_entities else 0.6
-                )
+                        return MemoryQuery(
+                            intent_type=MemoryIntentType.REFERENCE,
+                            query_text=message,
+                            time_reference=None,
+                            entity_references=resolved_entities,
+                            confidence=0.75 if resolved_entities else 0.6
+                        )
+                except re.error as e:
+                    if self.verbose:
+                        print(f"[MEMORY] Regex error in reference pattern: {e}")
+                    continue
 
-        # No memory intent
-        return MemoryQuery(
-            intent_type=MemoryIntentType.NONE,
-            query_text=message,
-            time_reference=None,
-            entity_references=[],
-            confidence=0.95
-        )
+            # No memory intent
+            return MemoryQuery(
+                intent_type=MemoryIntentType.NONE,
+                query_text=message,
+                time_reference=None,
+                entity_references=[],
+                confidence=0.95
+            )
+
+        except Exception as e:
+            if self.verbose:
+                print(f"[MEMORY] detect_memory_intent failed: {e}")
+            # Return safe default
+            return MemoryQuery(
+                intent_type=MemoryIntentType.NONE,
+                query_text=message,
+                time_reference=None,
+                entity_references=[],
+                confidence=0.5
+            )
 
     def _resolve_coreference(self, message: str, match: re.Match) -> List[str]:
         """
         Resolve coreferences like "that ticket", "the project", "it" to actual entities.
 
-        Uses recent entities from current session and entity store.
+        Uses recent entities from current session, last message context, and entity store.
         """
-        resolved = []
-        matched_text = match.group(0)
+        try:
+            resolved = []
+            matched_text = match.group(0)
 
-        # Determine what type of entity is being referenced
-        entity_type_hints = {
-            'ticket': ['ticket', 'issue', 'bug'],
-            'pr': ['pr', 'pull request'],
-            'project': ['project'],
-            'channel': ['channel'],
-        }
+            # Determine what type of entity is being referenced
+            entity_type_hints = {
+                'ticket': ['ticket', 'issue', 'bug', 'task'],
+                'pr': ['pr', 'pull request', 'merge request'],
+                'project': ['project'],
+                'channel': ['channel', 'room'],
+                'email': ['email', 'message', 'mail'],
+            }
 
-        target_type = None
-        for etype, keywords in entity_type_hints.items():
-            if any(kw in matched_text for kw in keywords):
-                target_type = etype
-                break
+            target_type = None
+            for etype, keywords in entity_type_hints.items():
+                if any(kw in matched_text for kw in keywords):
+                    target_type = etype
+                    break
 
-        # Get recent entities from current session
-        if self.current_session:
-            session_entities = list(self.current_session.get('entities', set()))
+            # Special handling for pronoun "it" - use context from the message
+            if matched_text.strip() == 'it':
+                # Look at surrounding context for type hints
+                context_patterns = {
+                    'ticket': r'(update|move|assign|close|done|progress|todo)\s+it',
+                    'project': r'(in|for|to)\s+it',
+                    'channel': r'(post|send|message)\s+.*\s+it',
+                }
+                for ctype, pattern in context_patterns.items():
+                    try:
+                        if re.search(pattern, message):
+                            target_type = ctype
+                            break
+                    except re.error:
+                        continue
 
-            # Filter by type if we know what we're looking for
-            if target_type == 'ticket':
-                # Look for Jira-style tickets
-                tickets = [e for e in session_entities if re.match(r'^[A-Z]+-\d+$', e)]
-                if tickets:
-                    resolved.extend(tickets[-MAX_RECENT_ENTITIES:])
-            elif target_type == 'project':
-                # Look for uppercase project names
-                projects = [e for e in session_entities if e.isupper() and len(e) <= 5]
-                if projects:
-                    resolved.extend(projects[-MAX_RECENT_ENTITIES:])
-            elif target_type == 'channel':
-                # Look for channel names
-                channels = [e for e in session_entities if e.startswith('#')]
-                if channels:
-                    resolved.extend(channels[-MAX_RECENT_ENTITIES:])
-            else:
-                # No specific type, return most recent entities
-                resolved.extend(session_entities[-MAX_RECENT_ENTITIES:])
+            # Get recent entities from current session
+            if self.current_session:
+                try:
+                    session_entities = list(self.current_session.get('entities', set()))
 
-        # If nothing found in session, check entity store
-        if not resolved and self.entities:
-            # Get most recently used entities
-            recent_entities = sorted(
-                self.entities.items(),
-                key=lambda x: x[1].get('last_seen', 0),
-                reverse=True
-            )[:MAX_RECENT_ENTITIES]
+                    # For "it", prioritize the most recently mentioned entity
+                    if matched_text.strip() == 'it' and session_entities:
+                        # Get the last entity from the last message
+                        if self.current_session.get('messages'):
+                            last_msg = self.current_session['messages'][-1]
+                            last_entities = self._extract_entities(last_msg.get('user', '') + ' ' + last_msg.get('response', ''))
+                            if last_entities:
+                                resolved.extend(last_entities[-3:])
 
-            for entity_id, data in recent_entities:
-                entity_value = data.get('value', entity_id)
+                    # Filter by type if we know what we're looking for
+                    if not resolved:
+                        if target_type == 'ticket':
+                            # Look for Jira-style tickets
+                            tickets = [e for e in session_entities if re.match(r'^[A-Z]+-\d+$', e)]
+                            if tickets:
+                                resolved.extend(tickets[-MAX_RECENT_ENTITIES:])
+                        elif target_type == 'project':
+                            # Look for uppercase project names
+                            projects = [e for e in session_entities if e.isupper() and len(e) <= 5]
+                            if projects:
+                                resolved.extend(projects[-MAX_RECENT_ENTITIES:])
+                        elif target_type == 'channel':
+                            # Look for channel names
+                            channels = [e for e in session_entities if e.startswith('#')]
+                            if channels:
+                                resolved.extend(channels[-MAX_RECENT_ENTITIES:])
+                        elif target_type == 'email':
+                            # Look for email addresses
+                            emails = [e for e in session_entities if '@' in e]
+                            if emails:
+                                resolved.extend(emails[-MAX_RECENT_ENTITIES:])
+                        else:
+                            # No specific type, return most recent entities
+                            resolved.extend(session_entities[-MAX_RECENT_ENTITIES:])
+                except Exception as e:
+                    if self.verbose:
+                        print(f"[COREFERENCE] Session entity extraction failed: {e}")
 
-                # Filter by type if known
-                if target_type == 'ticket':
-                    if re.match(r'^[A-Z]+-\d+$', entity_value):
-                        resolved.append(entity_value)
-                elif target_type == 'project':
-                    if entity_value.isupper() and len(entity_value) <= 5:
-                        resolved.append(entity_value)
-                elif target_type == 'channel':
-                    if entity_value.startswith('#'):
-                        resolved.append(entity_value)
-                else:
-                    resolved.append(entity_value)
+            # If nothing found in session, check entity store
+            if not resolved and self.entities:
+                try:
+                    # Get most recently used entities
+                    recent_entities = sorted(
+                        self.entities.items(),
+                        key=lambda x: x[1].get('last_seen', 0),
+                        reverse=True
+                    )[:MAX_RECENT_ENTITIES]
 
-        if resolved:
-            self.stats['coreferences_resolved'] += 1
+                    for entity_id, data in recent_entities:
+                        entity_value = data.get('value', entity_id)
+
+                        # Filter by type if known
+                        if target_type == 'ticket':
+                            if re.match(r'^[A-Z]+-\d+$', entity_value):
+                                resolved.append(entity_value)
+                        elif target_type == 'project':
+                            if entity_value.isupper() and len(entity_value) <= 5:
+                                resolved.append(entity_value)
+                        elif target_type == 'channel':
+                            if entity_value.startswith('#'):
+                                resolved.append(entity_value)
+                        elif target_type == 'email':
+                            if '@' in entity_value:
+                                resolved.append(entity_value)
+                        else:
+                            resolved.append(entity_value)
+                except Exception as e:
+                    if self.verbose:
+                        print(f"[COREFERENCE] Entity store lookup failed: {e}")
+
+            if resolved:
+                self.stats['coreferences_resolved'] += 1
+                if self.verbose:
+                    print(f"[COREFERENCE] Resolved '{matched_text}' → {resolved[:3]}")
+
+            return resolved[:5]  # Return top 5 matches
+
+        except Exception as e:
             if self.verbose:
-                print(f"[COREFERENCE] Resolved '{matched_text}' → {resolved[:3]}")
-
-        return resolved[:5]  # Return top 5 matches
+                print(f"[COREFERENCE] _resolve_coreference failed: {e}")
+            return []
 
     def _extract_time_reference(self, message: str) -> Optional[str]:
         """Extract time reference from message"""
@@ -447,18 +549,32 @@ class UnifiedMemory:
 
     def start_session(self, session_id: str):
         """Start a new conversation session"""
-        self.current_session = {
-            'session_id': session_id,
-            'start_time': time.time(),
-            'messages': [],
-            'entities': set(),
-            'intents': [],
-            'agents_used': set(),
-            'importance_score': 0.5
-        }
+        try:
+            self.current_session = {
+                'session_id': session_id,
+                'start_time': time.time(),
+                'messages': [],
+                'entities': set(),
+                'intents': [],
+                'agents_used': set(),
+                'importance_score': 0.5
+            }
 
-        if self.verbose:
-            print(f"[SESSION] Started {session_id[:8]}...")
+            if self.verbose:
+                print(f"[SESSION] Started {session_id[:8]}...")
+        except Exception as e:
+            if self.verbose:
+                print(f"[SESSION] Failed to start session: {e}")
+            # Ensure we have a minimal session even on error
+            self.current_session = {
+                'session_id': session_id or 'fallback',
+                'start_time': time.time(),
+                'messages': [],
+                'entities': set(),
+                'intents': [],
+                'agents_used': set(),
+                'importance_score': 0.5
+            }
 
     async def add_message(
         self,
@@ -471,93 +587,147 @@ class UnifiedMemory:
         if not self.current_session:
             return
 
-        # Store message
-        self.current_session['messages'].append({
-            'user': user_message[:500],
-            'response': response[:500],
-            'timestamp': time.time()
-        })
+        try:
+            # Store message
+            self.current_session['messages'].append({
+                'user': user_message[:500],
+                'response': response[:500],
+                'timestamp': time.time()
+            })
 
-        # Track agents
-        if agents_used:
-            self.current_session['agents_used'].update(agents_used)
+            # Track agents
+            if agents_used:
+                self.current_session['agents_used'].update(agents_used)
 
-        # Track intent
-        if intent_type and intent_type not in self.current_session['intents']:
-            self.current_session['intents'].append(intent_type)
+            # Track intent
+            if intent_type and intent_type not in self.current_session['intents']:
+                self.current_session['intents'].append(intent_type)
 
-        # Extract entities
-        entities = self._extract_entities(user_message)
-        self.current_session['entities'].update(entities)
+            # Extract entities with error handling
+            try:
+                entities = self._extract_entities(user_message)
+                self.current_session['entities'].update(entities)
 
-        # Update entity store
-        for entity in entities:
-            self._update_entity(entity)
+                # Update entity store
+                for entity in entities:
+                    self._update_entity(entity)
+            except Exception as e:
+                if self.verbose:
+                    print(f"[MEMORY] Entity extraction failed: {e}")
 
-        # Calculate importance score
-        self.current_session['importance_score'] = self._calculate_importance(
-            self.current_session
-        )
+            # Calculate importance score
+            self.current_session['importance_score'] = self._calculate_importance(
+                self.current_session
+            )
 
-        # Store as episode for semantic search
-        await self._store_episode(user_message, response, agents_used, intent_type)
+            # Store as episode for semantic search
+            await self._store_episode(user_message, response, agents_used, intent_type)
+
+        except Exception as e:
+            if self.verbose:
+                print(f"[MEMORY] add_message failed: {e}")
 
     async def end_session(self):
         """End the current session and consolidate"""
         if not self.current_session or not self.current_session['messages']:
             return
 
-        # Flush all pending episodes (batch embedding + storage)
-        await self._flush_episodes()
+        try:
+            # Flush all pending episodes (batch embedding + storage)
+            try:
+                await self._flush_episodes()
+            except Exception as e:
+                if self.verbose:
+                    print(f"[SESSION] Episode flush failed: {e}")
 
-        # Create session summary
-        session_data = {
-            'session_id': self.current_session['session_id'],
-            'start_time': self.current_session['start_time'],
-            'end_time': time.time(),
-            'message_count': len(self.current_session['messages']),
-            'entities': list(self.current_session['entities']),
-            'intents': self.current_session['intents'],
-            'agents_used': list(self.current_session['agents_used']),
-            'importance_score': self.current_session['importance_score'],
-            'user_messages': [m['user'] for m in self.current_session['messages'][:5]],
-            'summary': await self._create_summary(self.current_session)
-        }
+            # Create session summary
+            try:
+                summary = await self._create_summary(self.current_session)
+            except Exception as e:
+                if self.verbose:
+                    print(f"[SESSION] Summary creation failed: {e}")
+                summary = f"{len(self.current_session['messages'])} messages"
 
-        self.sessions.append(session_data)
+            session_data = {
+                'session_id': self.current_session['session_id'],
+                'start_time': self.current_session['start_time'],
+                'end_time': time.time(),
+                'message_count': len(self.current_session['messages']),
+                'entities': list(self.current_session['entities']),
+                'intents': self.current_session['intents'],
+                'agents_used': list(self.current_session['agents_used']),
+                'importance_score': self.current_session['importance_score'],
+                'user_messages': [m['user'] for m in self.current_session['messages'][:5]],
+                'summary': summary
+            }
 
-        # Keep last 10 sessions
-        if len(self.sessions) > 10:
-            self.sessions = self.sessions[-10:]
+            self.sessions.append(session_data)
 
-        # Run cleanup before saving
-        self._cleanup_stale_data()
+            # Importance-based session retention
+            if len(self.sessions) > 15:
+                # Always keep last 5 (recency matters)
+                recent_sessions = self.sessions[-5:]
+                older_sessions = self.sessions[:-5]
 
-        # Parallel async saves for performance
-        save_tasks = [self._save_sessions()]
+                # From older sessions, keep those with high importance (>= 0.7)
+                important_sessions = [s for s in older_sessions if s.get('importance_score', 0) >= 0.7]
 
-        if self._core_facts_dirty:
-            save_tasks.append(self._save_core_facts())
-            self._core_facts_dirty = False
+                # Combine and limit to max 15
+                retained = important_sessions + recent_sessions
+                if len(retained) > 15:
+                    # Sort by importance, keep top 15
+                    retained = sorted(retained, key=lambda s: s.get('importance_score', 0), reverse=True)[:15]
+                    # Re-sort by time for consistency
+                    retained = sorted(retained, key=lambda s: s.get('start_time', 0))
 
-        if self._entities_dirty:
-            save_tasks.append(self._save_entities())
-            self._entities_dirty = False
+                self.sessions = retained
+                if self.verbose:
+                    print(f"[SESSION] Retained {len(retained)} sessions (importance-based)")
 
-        # Save embedding cache for next session
-        save_tasks.append(self._save_embedding_cache())
+            # Run cleanup before saving
+            try:
+                self._cleanup_stale_data()
+            except Exception as e:
+                if self.verbose:
+                    print(f"[SESSION] Cleanup failed: {e}")
 
-        # Execute all saves in parallel
-        await asyncio.gather(*save_tasks)
+            # Parallel async saves for performance
+            save_tasks = [self._save_sessions()]
 
-        # Consolidate patterns into facts
-        await self._consolidate_sessions()
+            if self._core_facts_dirty:
+                save_tasks.append(self._save_core_facts())
+                self._core_facts_dirty = False
 
-        if self.verbose:
-            print(f"[SESSION] Ended with {session_data['message_count']} messages, "
-                  f"importance: {session_data['importance_score']:.2f}")
+            if self._entities_dirty:
+                save_tasks.append(self._save_entities())
+                self._entities_dirty = False
 
-        self.current_session = None
+            # Save embedding cache for next session
+            save_tasks.append(self._save_embedding_cache())
+
+            # Execute all saves in parallel with error handling
+            try:
+                await asyncio.gather(*save_tasks, return_exceptions=True)
+            except Exception as e:
+                if self.verbose:
+                    print(f"[SESSION] Save operations failed: {e}")
+
+            # Consolidate patterns into facts
+            try:
+                await self._consolidate_sessions()
+            except Exception as e:
+                if self.verbose:
+                    print(f"[SESSION] Consolidation failed: {e}")
+
+            if self.verbose:
+                print(f"[SESSION] Ended with {session_data['message_count']} messages, "
+                      f"importance: {session_data['importance_score']:.2f}")
+
+        except Exception as e:
+            if self.verbose:
+                print(f"[SESSION] end_session failed: {e}")
+        finally:
+            self.current_session = None
 
     def _cleanup_stale_data(self):
         """
@@ -577,7 +747,45 @@ class UnifiedMemory:
             cleaned.append(f"core_fact:{key}")
             self._core_facts_dirty = True
 
-        # 2. Prune entities not mentioned in last 5 sessions and with low mention count
+        # 2. Entity normalization and cleanup
+        if self.entities:
+            # Get current email from core_facts
+            current_email = None
+            for fact in self.core_facts.values():
+                if fact.key == 'user_email':
+                    current_email = fact.value.lower()
+                    break
+
+            # Merge child entities into parents (e.g., PROJ-12 → PROJ)
+            parent_map = {}  # child_key -> parent_key
+            for key in list(self.entities.keys()):
+                # Detect Jira-style children (PROJ-12 is child of proj)
+                if '-' in key and key.split('-')[0] in self.entities:
+                    parent_key = key.split('-')[0]
+                    parent_map[key] = parent_key
+
+            # Merge counts from children to parents
+            for child_key, parent_key in parent_map.items():
+                if child_key in self.entities and parent_key in self.entities:
+                    child_count = self.entities[child_key].get('mention_count', 1)
+                    self.entities[parent_key]['mention_count'] = (
+                        self.entities[parent_key].get('mention_count', 1) + child_count
+                    )
+                    del self.entities[child_key]
+                    cleaned.append(f"entity:{child_key}→{parent_key}")
+                    self._entities_dirty = True
+
+            # Remove superseded emails (keep only current)
+            if current_email:
+                email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+                import re
+                for key in list(self.entities.keys()):
+                    if re.match(email_pattern, key) and key != current_email:
+                        del self.entities[key]
+                        cleaned.append(f"entity:{key}(superseded)")
+                        self._entities_dirty = True
+
+        # 3. Prune entities not mentioned in last 5 sessions and with low mention count
         if len(self.sessions) >= 3:
             # Get entities mentioned in recent sessions
             recent_entities = set()
@@ -676,10 +884,31 @@ Keep under 75 words. Include specific identifiers mentioned. Just the summary.""
 
         try:
             response = await self.llm.generate(prompt)
-            return response.text.strip() if hasattr(response, 'text') else str(response).strip()
-        except:
-            # Fallback
-            return f"{len(messages)} messages about {', '.join(list(session.get('entities', []))[:3])}"
+            summary = response.text.strip() if hasattr(response, 'text') else str(response).strip()
+            if summary and len(summary) > 10:
+                return summary
+            raise ValueError("Empty summary from LLM")
+        except Exception as e:
+            if self.verbose:
+                print(f"[SESSION] Summary LLM failed: {e}")
+            # Better fallback - include topics from messages
+            entities = session.get('entities', [])
+            entity_str = f" about {', '.join(entities[:3])}" if entities else ""
+
+            # Extract key topics from messages
+            all_text = ' '.join([m['user'] for m in messages[:3]]).lower()
+            topics = []
+            if 'jira' in all_text or 'ticket' in all_text or 'task' in all_text:
+                topics.append('Jira')
+            if 'calendar' in all_text or 'event' in all_text or 'meeting' in all_text:
+                topics.append('calendar')
+            if 'slack' in all_text or 'message' in all_text:
+                topics.append('Slack')
+            if 'email' in all_text:
+                topics.append('email')
+
+            topic_str = f" ({', '.join(topics)})" if topics else ""
+            return f"{len(messages)} messages{entity_str}{topic_str}"
 
     # =========================================================================
     # SOMETIMES TIER - Session Context
@@ -691,40 +920,62 @@ Keep under 75 words. Include specific identifiers mentioned. Just the summary.""
 
         Returns last session context if it seems relevant to the query.
         """
-        if not self.sessions:
+        try:
+            if not self.sessions:
+                return ""
+
+            # Get last session
+            last_session = self.sessions[-1]
+
+            # Check relevance
+            try:
+                if not self._is_session_relevant(last_session, query):
+                    return ""
+            except Exception as e:
+                if self.verbose:
+                    print(f"[MEMORY] Session relevance check failed: {e}")
+                # Default to not including if relevance check fails
+                return ""
+
+            # Format last session
+            try:
+                date = datetime.fromtimestamp(last_session['start_time']).strftime("%Y-%m-%d %H:%M")
+            except (KeyError, TypeError, ValueError):
+                date = "Unknown"
+
+            lines = [
+                "# Previous Session Context",
+                "",
+                f"**Last session** ({date}, {last_session.get('message_count', 0)} messages):",
+                f"  {last_session.get('summary', 'No summary')}",
+                ""
+            ]
+
+            # Show key messages for context (not just first message)
+            if last_session.get('user_messages'):
+                lines.append("  **Key messages from session:**")
+                for i, msg in enumerate(last_session['user_messages'][:5]):
+                    try:
+                        # Show more of each message to capture important details
+                        msg_preview = msg[:300] if len(msg) <= 300 else f"{msg[:300]}..."
+                        lines.append(f"  - {msg_preview}")
+                    except (TypeError, AttributeError):
+                        continue
+                lines.append("")
+
+            if last_session.get('entities'):
+                try:
+                    entities = last_session['entities'][:10]
+                    lines.append(f"  _Entities: {', '.join(str(e) for e in entities)}_")
+                except (TypeError, AttributeError):
+                    pass
+
+            return "\n".join(lines)
+
+        except Exception as e:
+            if self.verbose:
+                print(f"[MEMORY] get_sometimes_context failed: {e}")
             return ""
-
-        # Get last session
-        last_session = self.sessions[-1]
-
-        # Check relevance
-        if not self._is_session_relevant(last_session, query):
-            return ""
-
-        # Format last session
-        date = datetime.fromtimestamp(last_session['start_time']).strftime("%Y-%m-%d %H:%M")
-
-        lines = [
-            "# Previous Session Context",
-            "",
-            f"**Last session** ({date}, {last_session['message_count']} messages):",
-            f"  {last_session.get('summary', 'No summary')}",
-            ""
-        ]
-
-        # Show key messages for context (not just first message)
-        if last_session.get('user_messages'):
-            lines.append("  **Key messages from session:**")
-            for i, msg in enumerate(last_session['user_messages'][:5]):
-                # Show more of each message to capture important details
-                msg_preview = msg[:300] if len(msg) <= 300 else f"{msg[:300]}..."
-                lines.append(f"  - {msg_preview}")
-            lines.append("")
-
-        if last_session.get('entities'):
-            lines.append(f"  _Entities: {', '.join(last_session['entities'][:10])}_")
-
-        return "\n".join(lines)
 
     def _is_session_relevant(self, session: Dict, query: str) -> bool:
         """Check if a session is relevant to the current query"""
@@ -776,47 +1027,64 @@ Keep under 75 words. Include specific identifiers mentioned. Just the summary.""
         """
         self.stats['queries'] += 1
 
-        # Get query embedding
-        query_embedding = await self._get_embedding(query)
+        try:
+            # Get query embedding
+            query_embedding = await self._get_embedding(query)
 
-        # Search episodes
-        results = self.episodes.query(
-            query_embeddings=[query_embedding],
-            n_results=n_results,
-            include=["documents", "metadatas", "distances"]
-        )
+            # Check if embedding is valid (not all zeros)
+            if all(v == 0.0 for v in query_embedding[:10]):
+                if self.verbose:
+                    print("[MEMORY] Invalid embedding for query, skipping search")
+                return ""
 
-        if not results or not results['ids'] or not results['ids'][0]:
+            # Search episodes
+            results = self.episodes.query(
+                query_embeddings=[query_embedding],
+                n_results=n_results,
+                include=["documents", "metadatas", "distances"]
+            )
+
+            if not results or not results['ids'] or not results['ids'][0]:
+                return ""
+
+            lines = [
+                "# Relevant Past Interactions",
+                "",
+            ]
+
+            for i, episode_id in enumerate(results['ids'][0]):
+                try:
+                    distance = results['distances'][0][i]
+                    similarity = 1 - distance
+
+                    if similarity < min_similarity:
+                        continue
+
+                    metadata = results['metadatas'][0][i]
+                    document = results['documents'][0][i]
+
+                    date = metadata.get('date', 'Unknown')
+
+                    lines.append(f"**{i+1}. [{date}]** (relevance: {similarity:.0%})")
+                    lines.append(f"   {document}")
+
+                    if metadata.get('agents'):
+                        lines.append(f"   _Agents: {metadata['agents']}_")
+                    lines.append("")
+                except Exception as e:
+                    if self.verbose:
+                        print(f"[MEMORY] Error processing search result {i}: {e}")
+                    continue
+
+            if len(lines) <= 2:
+                return ""
+
+            return "\n".join(lines)
+
+        except Exception as e:
+            if self.verbose:
+                print(f"[MEMORY] Semantic search failed: {e}")
             return ""
-
-        lines = [
-            "# Relevant Past Interactions",
-            "",
-        ]
-
-        for i, episode_id in enumerate(results['ids'][0]):
-            distance = results['distances'][0][i]
-            similarity = 1 - distance
-
-            if similarity < min_similarity:
-                continue
-
-            metadata = results['metadatas'][0][i]
-            document = results['documents'][0][i]
-
-            date = metadata.get('date', 'Unknown')
-
-            lines.append(f"**{i+1}. [{date}]** (relevance: {similarity:.0%})")
-            lines.append(f"   {document}")
-
-            if metadata.get('agents'):
-                lines.append(f"   _Agents: {metadata['agents']}_")
-            lines.append("")
-
-        if len(lines) <= 2:
-            return ""
-
-        return "\n".join(lines)
 
     async def _store_episode(
         self,
@@ -855,58 +1123,91 @@ Keep under 75 words. Include specific identifiers mentioned. Just the summary.""
         episodes_to_store = []
 
         for episode in self._pending_episodes:
-            summary = f"User asked: {episode['user_message']}. Response: {episode['response']}"
+            try:
+                summary = f"User asked: {episode['user_message']}. Response: {episode['response']}"
 
-            # Generate ID
-            episode_id = hashlib.sha256(
-                f"{episode['user_message']}{episode['timestamp']}".encode()
-            ).hexdigest()[:16]
+                # Generate ID
+                episode_id = hashlib.sha256(
+                    f"{episode['user_message']}{episode['timestamp']}".encode()
+                ).hexdigest()[:16]
 
-            # Metadata - ChromaDB doesn't accept None values
-            metadata = {
-                "timestamp": episode['timestamp'],
-                "date": datetime.fromtimestamp(episode['timestamp']).strftime("%Y-%m-%d"),
-                "agents": ",".join(episode['agents_used']) if episode['agents_used'] else "",
-                "intent": episode['intent_type'] if episode['intent_type'] else "",
-                "user_message": episode['user_message'] if episode['user_message'] else "",
-                "merged_count": 1
-            }
+                # Metadata - ChromaDB doesn't accept None values
+                metadata = {
+                    "timestamp": episode['timestamp'],
+                    "date": datetime.fromtimestamp(episode['timestamp']).strftime("%Y-%m-%d"),
+                    "agents": ",".join(episode['agents_used']) if episode['agents_used'] else "",
+                    "intent": episode['intent_type'] if episode['intent_type'] else "",
+                    "user_message": episode['user_message'] if episode['user_message'] else "",
+                    "merged_count": 1
+                }
 
-            episodes_to_store.append({
-                'id': episode_id,
-                'summary': summary,
-                'metadata': metadata
-            })
+                episodes_to_store.append({
+                    'id': episode_id,
+                    'summary': summary,
+                    'metadata': metadata
+                })
+            except Exception as e:
+                if self.verbose:
+                    print(f"[MEMORY] Episode preparation failed: {e}")
+                continue
 
-        # Get embeddings for all episodes
-        # Note: Currently sequential, but could be parallelized with asyncio.gather
+        # Get embeddings for all episodes with error handling
         embeddings = []
-        for ep in episodes_to_store:
-            embedding = await self._get_embedding(ep['summary'])
-            embeddings.append(embedding)
+        failed_indices = []
+        for i, ep in enumerate(episodes_to_store):
+            try:
+                embedding = await self._get_embedding(ep['summary'])
+                embeddings.append(embedding)
+            except Exception as e:
+                if self.verbose:
+                    print(f"[MEMORY] Embedding failed for episode {i}: {e}")
+                failed_indices.append(i)
+                embeddings.append([0.0] * 768)  # Fallback zero embedding
 
-        # Batch store all episodes at once
-        if episodes_to_store:
-            self.episodes.add(
-                ids=[ep['id'] for ep in episodes_to_store],
-                embeddings=embeddings,
-                documents=[ep['summary'] for ep in episodes_to_store],
-                metadatas=[ep['metadata'] for ep in episodes_to_store]
-            )
+        # Remove failed episodes if they have zero embeddings
+        valid_episodes = []
+        valid_embeddings = []
+        for i, (ep, emb) in enumerate(zip(episodes_to_store, embeddings)):
+            if i not in failed_indices:
+                valid_episodes.append(ep)
+                valid_embeddings.append(emb)
 
-        if self.verbose:
-            print(f"[MEMORY] Stored {len(episodes_to_store)} episodes in batch")
+        # Batch store all valid episodes at once
+        if valid_episodes:
+            try:
+                self.episodes.add(
+                    ids=[ep['id'] for ep in valid_episodes],
+                    embeddings=valid_embeddings,
+                    documents=[ep['summary'] for ep in valid_episodes],
+                    metadatas=[ep['metadata'] for ep in valid_episodes]
+                )
+                if self.verbose:
+                    print(f"[MEMORY] Stored {len(valid_episodes)} episodes in batch")
+            except Exception as e:
+                if self.verbose:
+                    print(f"[MEMORY] ChromaDB storage failed: {e}")
 
         # Clear the queue
         self._pending_episodes = []
 
     async def _get_embedding(self, text: str) -> List[float]:
-        """Get embedding with persistent caching"""
+        """Get embedding with persistent LRU caching"""
         cache_key = hashlib.md5(text.encode()).hexdigest()
 
         if cache_key in self._embedding_cache:
             self.stats['cache_hits'] += 1
-            return self._embedding_cache[cache_key]
+            entry = self._embedding_cache[cache_key]
+            # Update last_accessed for LRU (handle both old and new format)
+            if isinstance(entry, dict):
+                entry['last_accessed'] = time.time()
+                return entry['embedding']
+            else:
+                # Migrate old format to new format
+                self._embedding_cache[cache_key] = {
+                    'embedding': entry,
+                    'last_accessed': time.time()
+                }
+                return entry
 
         try:
             result = genai.embed_content(
@@ -916,8 +1217,11 @@ Keep under 75 words. Include specific identifiers mentioned. Just the summary.""
             )
             embedding = result['embedding']
 
-            # Cache (will be persisted at session end)
-            self._embedding_cache[cache_key] = embedding
+            # Cache with LRU tracking (will be persisted at session end)
+            self._embedding_cache[cache_key] = {
+                'embedding': embedding,
+                'last_accessed': time.time()
+            }
 
             return embedding
         except Exception as e:
@@ -1238,11 +1542,37 @@ Keep each fact under 15 words. Be specific and actionable."""
         if facts_context:
             context_parts.append(facts_context)
 
-        # ON-DEMAND tier - Only if recall intent detected
+        # ON-DEMAND tier - Trigger semantic search more aggressively
+        should_search = False
+
+        # Always search for recall intents
         if memory_query.intent_type == MemoryIntentType.RECALL:
-            ondemand_context = await self.get_ondemand_context(message)
-            if ondemand_context:
-                context_parts.append(ondemand_context)
+            should_search = True
+
+        # Search for reference intents when we couldn't resolve entities
+        elif memory_query.intent_type == MemoryIntentType.REFERENCE:
+            if not memory_query.entity_references:
+                should_search = True
+
+        # Search when message contains history-related keywords (lower threshold)
+        message_lower = message.lower()
+        history_keywords = ['before', 'previous', 'again', 'like last', 'same as', 'earlier']
+        if any(kw in message_lower for kw in history_keywords):
+            should_search = True
+
+        if should_search:
+            try:
+                # Use lower similarity threshold for broader matches
+                ondemand_context = await self.get_ondemand_context(
+                    message,
+                    n_results=5,
+                    min_similarity=0.6  # Lowered from 0.7
+                )
+                if ondemand_context:
+                    context_parts.append(ondemand_context)
+            except Exception as e:
+                if self.verbose:
+                    print(f"[MEMORY] Semantic search failed: {e}")
 
         # Entity context (for reference intents)
         if memory_query.intent_type == MemoryIntentType.REFERENCE:
@@ -1388,15 +1718,23 @@ Keep each fact under 15 words. Be specific and actionable."""
                 print(f"[LOAD] Entities error: {e}")
 
     async def _save_embedding_cache(self):
-        """Save embedding cache to disk asynchronously for persistence across sessions"""
+        """Save embedding cache to disk with LRU eviction"""
         try:
-            # Limit cache size before saving (keep most recent 1000 entries)
-            max_cache_size = 1000
+            # Limit cache size before saving (LRU eviction)
+            max_cache_size = 500
             if len(self._embedding_cache) > max_cache_size:
-                # Keep entries based on insertion order (dict maintains order in Python 3.7+)
-                keys = list(self._embedding_cache.keys())
-                for key in keys[:-max_cache_size]:
+                # Sort by last_accessed time (oldest first)
+                sorted_entries = sorted(
+                    self._embedding_cache.items(),
+                    key=lambda x: x[1].get('last_accessed', 0) if isinstance(x[1], dict) else 0
+                )
+                # Keep only the most recently accessed entries
+                entries_to_remove = len(self._embedding_cache) - max_cache_size
+                for key, _ in sorted_entries[:entries_to_remove]:
                     del self._embedding_cache[key]
+
+                if self.verbose:
+                    print(f"[CACHE] Evicted {entries_to_remove} LRU embeddings")
 
             async with aiofiles.open(f"{self.storage_dir}/embedding_cache.json", 'w') as f:
                 await f.write(json.dumps(self._embedding_cache))
