@@ -37,6 +37,11 @@ DECAY_RATE = 0.02  # Halves importance every ~35 hours
 SIMILARITY_THRESHOLD = 0.85  # For semantic deduplication
 MAX_RECENT_ENTITIES = 20  # For coreference resolution
 
+# Working memory constants
+WORKING_MEMORY_CAPACITY = 7  # 7±2 items (Miller's Law)
+WORKING_MEMORY_TTL = 60  # seconds
+ATTENTION_WINDOW = 5  # Last N entities in focus
+
 
 class MemoryTier(Enum):
     """Memory injection tiers"""
@@ -83,13 +88,385 @@ class MemoryQuery:
     confidence: float
 
 
+# ============================================================================
+# LAYER 1: WORKING MEMORY (Immediate Context)
+# ============================================================================
+
+class WorkingMemory:
+    """
+    Layer 1: Working Memory - Immediate, volatile context
+
+    Purpose: Hold information actively being processed RIGHT NOW
+    Capacity: 5-7 items (limited attention, Miller's Law)
+    Duration: ~30-60 seconds (current turn only)
+    Access: Instant (<1ms)
+    Storage: In-memory only (volatile)
+
+    This is the "mental workspace" - what you're consciously thinking about.
+    """
+
+    def __init__(self, verbose: bool = False):
+        self.verbose = verbose
+
+        # Current turn data
+        self.current_message: Optional[str] = None
+        self.current_intent: Optional[str] = None
+        self.current_entities: List[Dict] = []
+
+        # Attention buffer (limited capacity)
+        self.attention_buffer: List[Dict] = []  # Recent entities in focus
+
+        # Active references for coreference resolution
+        self.active_references: Dict[str, Any] = {}  # "it" → entity
+
+        # Salience/focus scores
+        self.focus_scores: Dict[str, float] = {}  # entity_id → salience
+
+        # Timestamp for TTL
+        self.last_update: float = time.time()
+
+    def add_turn(self, message: str, entities: List[Dict], intent: str = None):
+        """
+        Process new turn - update working memory
+
+        Args:
+            message: Current user message
+            entities: Entities extracted from message
+            intent: Detected intent
+        """
+        self.current_message = message
+        self.current_intent = intent
+        self.current_entities = entities
+        self.last_update = time.time()
+
+        # Update attention buffer with new entities
+        for entity in entities:
+            self._add_to_attention(entity)
+
+        # Update active references for coreference
+        self._update_references()
+
+        # Calculate salience scores
+        self._calculate_salience()
+
+        if self.verbose:
+            print(f"[L1-WORKING] Updated: {len(self.attention_buffer)} items in attention")
+
+    def _add_to_attention(self, entity: Dict):
+        """Add entity to attention buffer with capacity limit"""
+        # Check if already in attention
+        entity_id = f"{entity.get('type', 'unknown')}:{entity.get('value', '')}"
+
+        # Remove if exists (will re-add to maintain recency)
+        self.attention_buffer = [e for e in self.attention_buffer
+                                 if f"{e.get('type')}:{e.get('value')}" != entity_id]
+
+        # Add to end (most recent)
+        entity_with_timestamp = entity.copy()
+        entity_with_timestamp['timestamp'] = time.time()
+        self.attention_buffer.append(entity_with_timestamp)
+
+        # Maintain capacity limit (WORKING_MEMORY_CAPACITY)
+        if len(self.attention_buffer) > WORKING_MEMORY_CAPACITY:
+            self.attention_buffer = self.attention_buffer[-WORKING_MEMORY_CAPACITY:]
+
+    def _update_references(self):
+        """Update active references for coreference resolution"""
+        # Most recent entity becomes "it", "that"
+        if self.attention_buffer:
+            most_recent = self.attention_buffer[-1]
+            self.active_references['it'] = most_recent
+            self.active_references['that'] = most_recent
+            self.active_references['this'] = most_recent
+
+            # Type-specific references
+            entity_type = most_recent.get('type', '')
+            if entity_type == 'ticket':
+                self.active_references['the ticket'] = most_recent
+                self.active_references['the issue'] = most_recent
+            elif entity_type == 'pr':
+                self.active_references['the pr'] = most_recent
+                self.active_references['the pull request'] = most_recent
+            elif entity_type == 'project':
+                self.active_references['the project'] = most_recent
+
+    def _calculate_salience(self):
+        """Calculate salience/focus scores for entities in attention"""
+        self.focus_scores = {}
+
+        for i, entity in enumerate(self.attention_buffer):
+            entity_id = f"{entity.get('type')}:{entity.get('value')}"
+
+            # Recency: More recent = higher salience
+            recency_score = (i + 1) / len(self.attention_buffer)
+
+            # Current turn bonus
+            is_current = entity in self.current_entities
+            current_bonus = 0.5 if is_current else 0.0
+
+            # Combined salience
+            self.focus_scores[entity_id] = min(1.0, recency_score + current_bonus)
+
+    def resolve_reference(self, phrase: str) -> Optional[Dict]:
+        """
+        Resolve ambiguous reference using working memory
+
+        Args:
+            phrase: Reference phrase ("it", "that", "the ticket")
+
+        Returns:
+            Entity dict if resolved, None otherwise
+        """
+        phrase_lower = phrase.lower().strip()
+
+        # Check active references first
+        if phrase_lower in self.active_references:
+            return self.active_references[phrase_lower]
+
+        # Fallback to most recent in attention
+        if self.attention_buffer:
+            return self.attention_buffer[-1]
+
+        return None
+
+    def get_active_context(self) -> Dict:
+        """Get current working memory context"""
+        age_seconds = time.time() - self.last_update
+
+        return {
+            'current_message': self.current_message,
+            'current_intent': self.current_intent,
+            'current_entities': self.current_entities,
+            'attention_buffer': self.attention_buffer[-ATTENTION_WINDOW:],
+            'focus_scores': self.focus_scores,
+            'age_seconds': age_seconds,
+            'is_stale': age_seconds > WORKING_MEMORY_TTL
+        }
+
+    def clear(self):
+        """Clear volatile working memory (called after turn consolidation)"""
+        self.current_message = None
+        self.current_intent = None
+        self.current_entities = []
+        # Keep attention buffer for continuity
+
+    def reset(self):
+        """Full reset (called at session end)"""
+        self.current_message = None
+        self.current_intent = None
+        self.current_entities = []
+        self.attention_buffer = []
+        self.active_references = {}
+        self.focus_scores = {}
+
+
+# ============================================================================
+# LAYER 2: EPISODIC BUFFER (Session Context)
+# ============================================================================
+
+class EpisodicBuffer:
+    """
+    Layer 2: Episodic Buffer - Current session context
+
+    Purpose: Maintain coherent episode of current conversation
+    Capacity: Entire session (100s-1000s of turns)
+    Duration: Current session + last session (continuity)
+    Access: Fast (~10ms, in-memory)
+    Storage: In-memory during session, persisted to ChromaDB at end
+
+    This is your "recent memory" - the ongoing conversation.
+    """
+
+    def __init__(self, session_id: str, verbose: bool = False):
+        self.session_id = session_id
+        self.verbose = verbose
+        self.start_time = time.time()
+
+        # Turn-by-turn tracking
+        self.turns: List[Dict] = []
+
+        # Entity tracking across session
+        self.session_entities: Dict[str, Dict] = {}  # entity_id → {count, last_seen, salience}
+
+        # Topic tracking
+        self.current_topic: Optional[str] = None
+        self.topic_transitions: List[Dict] = []
+
+        # Intent tracking
+        self.intents: List[str] = []
+
+        # Agent usage
+        self.agents_used: set = set()
+
+        # Importance scoring
+        self.importance_score: float = 0.5  # Overall session importance
+
+    def add_turn(self, user_message: str, response: str, entities: List[Dict],
+                 intent: str = None, agents: List[str] = None):
+        """
+        Add a conversation turn to the episodic buffer
+
+        Args:
+            user_message: User's message
+            response: Assistant's response
+            entities: Extracted entities
+            intent: Detected intent
+            agents: Agents used in this turn
+        """
+        turn = {
+            'timestamp': time.time(),
+            'user_message': user_message,
+            'response': response[:500],  # Truncate for storage
+            'entities': entities,
+            'intent': intent,
+            'agents': agents or []
+        }
+
+        self.turns.append(turn)
+
+        # Update entity tracking
+        for entity in entities:
+            entity_id = f"{entity.get('type')}:{entity.get('value')}"
+
+            if entity_id not in self.session_entities:
+                self.session_entities[entity_id] = {
+                    'entity': entity,
+                    'count': 0,
+                    'first_seen': time.time(),
+                    'last_seen': time.time(),
+                    'salience': 0.0
+                }
+
+            self.session_entities[entity_id]['count'] += 1
+            self.session_entities[entity_id]['last_seen'] = time.time()
+
+        # Update intents
+        if intent and intent not in self.intents:
+            self.intents.append(intent)
+
+        # Update agents
+        if agents:
+            self.agents_used.update(agents)
+
+        # Update topic
+        self._update_topic(user_message)
+
+        # Update importance score
+        self._update_importance()
+
+        if self.verbose:
+            print(f"[L2-EPISODIC] Turn added: {len(self.turns)} total turns")
+
+    def _update_topic(self, message: str):
+        """Detect and track topic changes"""
+        # Simple topic detection (can be enhanced with LLM)
+        topics = {
+            'authentication': ['auth', 'login', 'password', 'security', 'signin'],
+            'deployment': ['deploy', 'release', 'production', 'staging'],
+            'bugs': ['bug', 'issue', 'error', 'problem', 'fix'],
+            'features': ['feature', 'enhancement', 'new', 'add'],
+            'testing': ['test', 'testing', 'qa', 'quality'],
+            'documentation': ['docs', 'documentation', 'readme', 'guide']
+        }
+
+        message_lower = message.lower()
+        detected_topic = None
+
+        for topic, keywords in topics.items():
+            if any(kw in message_lower for kw in keywords):
+                detected_topic = topic
+                break
+
+        if detected_topic and detected_topic != self.current_topic:
+            self.topic_transitions.append({
+                'from': self.current_topic,
+                'to': detected_topic,
+                'timestamp': time.time(),
+                'turn_index': len(self.turns) - 1
+            })
+            self.current_topic = detected_topic
+
+    def _update_importance(self):
+        """Update session importance score"""
+        # Factors that increase importance:
+        # - Number of agents used
+        # - Number of entities mentioned
+        # - Number of actions taken
+        # - Topic complexity
+
+        agent_factor = min(1.0, len(self.agents_used) / 3.0)
+        entity_factor = min(1.0, len(self.session_entities) / 10.0)
+        turn_factor = min(1.0, len(self.turns) / 20.0)
+
+        self.importance_score = (agent_factor + entity_factor + turn_factor) / 3.0
+
+    def get_recent_turns(self, n: int = 5) -> List[Dict]:
+        """Get last N turns"""
+        return self.turns[-n:] if len(self.turns) >= n else self.turns
+
+    def get_session_summary_data(self) -> Dict:
+        """Get structured summary data for session"""
+        return {
+            'session_id': self.session_id,
+            'start_time': self.start_time,
+            'end_time': time.time(),
+            'duration_seconds': time.time() - self.start_time,
+            'turn_count': len(self.turns),
+            'intents': self.intents,
+            'entities': list(self.session_entities.keys())[:20],  # Top 20
+            'agents_used': list(self.agents_used),
+            'importance_score': self.importance_score,
+            'current_topic': self.current_topic,
+            'topic_transitions': len(self.topic_transitions),
+            'user_messages': [t['user_message'][:200] for t in self.turns[:5]]
+        }
+
+    def get_entities_by_salience(self, top_k: int = 10) -> List[Dict]:
+        """Get most salient entities from session"""
+        # Calculate salience for each entity
+        for entity_id, data in self.session_entities.items():
+            # Recency
+            age_seconds = time.time() - data['last_seen']
+            recency_score = 1.0 / (1.0 + age_seconds / 60.0)  # Decay over minutes
+
+            # Frequency
+            frequency_score = min(1.0, data['count'] / 5.0)
+
+            # Combined salience
+            data['salience'] = (recency_score + frequency_score) / 2.0
+
+        # Sort by salience
+        sorted_entities = sorted(
+            self.session_entities.items(),
+            key=lambda x: x[1]['salience'],
+            reverse=True
+        )
+
+        return [data['entity'] for _, data in sorted_entities[:top_k]]
+
+    def clear(self):
+        """Clear episodic buffer (called at session end)"""
+        self.turns = []
+        self.session_entities = {}
+        self.current_topic = None
+        self.topic_transitions = []
+        self.intents = []
+        self.agents_used = set()
+        self.importance_score = 0.5
+
+
 class UnifiedMemory:
     """
-    Single unified memory system with tiered injection.
+    Single unified memory system with layered architecture.
+
+    Architecture:
+    - Layer 1 (Working Memory): Immediate, volatile context (current turn)
+    - Layer 2 (Episodic Buffer): Current session context
+    - Layer 3 (Long-term Memory): Persistent facts and semantic search
 
     Tiers:
     - ALWAYS: Core facts (timezone, name, default project)
-    - SOMETIMES: Last session context (if relevant)
+    - SOMETIMES: Relevant past sessions (semantic search)
     - ON_DEMAND: Full semantic search (for recall queries)
     """
 
@@ -108,31 +485,46 @@ class UnifiedMemory:
         # Ensure directory exists
         Path(storage_dir).mkdir(parents=True, exist_ok=True)
 
-        # Core facts (always injected)
+        # =================================================================
+        # LAYERED MEMORY ARCHITECTURE
+        # =================================================================
+
+        # Layer 1: Working Memory (immediate, volatile)
+        self.working_memory = WorkingMemory(verbose=verbose)
+
+        # Layer 2: Episodic Buffer (current session, semi-persistent)
+        self.episodic_buffer: Optional[EpisodicBuffer] = None  # Created on session start
+
+        # Layer 3: Long-term Memory (persistent, semantic)
+        # - Core facts (always injected)
         self.core_facts: Dict[str, CoreFact] = {}
         self._load_core_facts()
 
-        # Consolidated facts (learned from patterns)
+        # - Consolidated facts (learned from patterns)
         self.consolidated_facts: List[ConsolidatedFact] = []
         self._load_consolidated_facts()
 
-        # Session storage
+        # - Session storage
         self.sessions: List[Dict] = []
         self._load_sessions()
 
-        # Entity store
+        # - Entity store
         self.entities: Dict[str, Dict] = {}
         self._load_entities()
 
-        # Current session
+        # - Current session (legacy support, will be replaced by episodic_buffer)
         self.current_session: Optional[Dict] = None
 
-        # ChromaDB for semantic search
+        # - ChromaDB for semantic search
         self._init_vector_store()
 
-        # Embedding cache (loaded from disk for persistence)
+        # - Embedding cache (loaded from disk for persistence)
         self._embedding_cache: Dict[str, List[float]] = {}
         self._load_embedding_cache()
+
+        # =================================================================
+        # PROCESSING QUEUES
+        # =================================================================
 
         # Pending episodes queue (for batch processing at session end)
         self._pending_episodes: List[Dict] = []
@@ -141,18 +533,28 @@ class UnifiedMemory:
         self._core_facts_dirty: bool = False
         self._entities_dirty: bool = False
 
-        # Stats
+        # =================================================================
+        # STATISTICS
+        # =================================================================
+
         self.stats = {
             'queries': 0,
             'cache_hits': 0,
             'consolidations': 0,
             'merges': 0,  # Semantic deduplication merges
             'coreferences_resolved': 0,  # Entity coreference resolutions
-            'sessions_since_consolidation': 0  # For debouncing consolidation
+            'sessions_since_consolidation': 0,  # For debouncing consolidation
+            'semantic_searches': 0,  # Number of semantic session searches
+            'layer1_hits': 0,  # Working memory resolutions
+            'layer2_hits': 0,  # Episodic buffer resolutions
+            'layer3_hits': 0   # Long-term memory resolutions
         }
 
         if self.verbose:
-            print(f"[UNIFIED MEMORY] Initialized: {len(self.core_facts)} core facts, "
+            print(f"[UNIFIED MEMORY] Initialized (Layered Architecture)")
+            print(f"  Layer 1 (Working): Active")
+            print(f"  Layer 2 (Episodic): Ready")
+            print(f"  Layer 3 (Long-term): {len(self.core_facts)} facts, "
                   f"{len(self.sessions)} sessions, {len(self.entities)} entities")
 
     def _init_vector_store(self):
@@ -548,8 +950,12 @@ class UnifiedMemory:
     # =========================================================================
 
     def start_session(self, session_id: str):
-        """Start a new conversation session"""
+        """Start a new conversation session with layered memory"""
         try:
+            # Create episodic buffer for this session (Layer 2)
+            self.episodic_buffer = EpisodicBuffer(session_id, verbose=self.verbose)
+
+            # Legacy current_session for backward compatibility
             self.current_session = {
                 'session_id': session_id,
                 'start_time': time.time(),
@@ -560,12 +966,18 @@ class UnifiedMemory:
                 'importance_score': 0.5
             }
 
+            # Reset working memory for new session (Layer 1)
+            self.working_memory.reset()
+
             if self.verbose:
-                print(f"[SESSION] Started {session_id[:8]}...")
+                print(f"[SESSION] Started {session_id[:8]} with layered memory")
+                print(f"  Layer 1 (Working): Reset")
+                print(f"  Layer 2 (Episodic): Created")
         except Exception as e:
             if self.verbose:
                 print(f"[SESSION] Failed to start session: {e}")
-            # Ensure we have a minimal session even on error
+            # Ensure we have minimal session even on error
+            self.episodic_buffer = EpisodicBuffer(session_id or 'fallback', verbose=self.verbose)
             self.current_session = {
                 'session_id': session_id or 'fallback',
                 'start_time': time.time(),
@@ -712,12 +1124,23 @@ class UnifiedMemory:
                 if self.verbose:
                     print(f"[SESSION] Save operations failed: {e}")
 
-            # Consolidate patterns into facts
+            # Consolidate patterns into facts (OLD)
             try:
                 await self._consolidate_sessions()
             except Exception as e:
                 if self.verbose:
                     print(f"[SESSION] Consolidation failed: {e}")
+
+            # =================================================================
+            # NEW: Store session in ChromaDB with embeddings for semantic search
+            # =================================================================
+            try:
+                await self.consolidate_session()
+                if self.verbose:
+                    print(f"[SESSION] ✅ Session stored in ChromaDB for semantic search")
+            except Exception as e:
+                if self.verbose:
+                    print(f"[SESSION] ⚠️  Failed to store in ChromaDB: {e}")
 
             if self.verbose:
                 print(f"[SESSION] Ended with {session_data['message_count']} messages, "
@@ -728,6 +1151,352 @@ class UnifiedMemory:
                 print(f"[SESSION] end_session failed: {e}")
         finally:
             self.current_session = None
+
+    # =========================================================================
+    # MEMORY CONSOLIDATION (Layered Architecture)
+    # =========================================================================
+
+    async def consolidate_turn(
+        self,
+        user_message: str,
+        response: str,
+        entities: List[Dict],
+        intent: str = None,
+        agents: List[str] = None
+    ):
+        """
+        Consolidate memory after each turn:
+        Layer 1 (Working) → Layer 2 (Episodic) → Layer 3 (Long-term)
+
+        This is called after processing each user message.
+        """
+        try:
+            # =================================================================
+            # Layer 1 → Layer 2: Update working memory and episodic buffer
+            # =================================================================
+
+            # Update working memory (Layer 1)
+            self.working_memory.add_turn(user_message, entities, intent)
+            self.stats['layer1_hits'] += 1
+
+            # Get working memory context
+            working_ctx = self.working_memory.get_active_context()
+
+            # Add to episodic buffer (Layer 2)
+            if self.episodic_buffer:
+                self.episodic_buffer.add_turn(
+                    user_message=user_message,
+                    response=response,
+                    entities=entities,
+                    intent=intent,
+                    agents=agents
+                )
+                self.stats['layer2_hits'] += 1
+
+            # =================================================================
+            # Layer 2 → Layer 3: Extract facts if important
+            # =================================================================
+
+            # Check if any facts should be promoted to long-term (Layer 3)
+            if self._should_extract_facts(working_ctx, entities, intent):
+                await self._extract_and_store_facts(user_message, entities)
+                self.stats['layer3_hits'] += 1
+
+            if self.verbose:
+                print(f"[CONSOLIDATE] Turn consolidated across all layers")
+
+        except Exception as e:
+            if self.verbose:
+                print(f"[CONSOLIDATE] Turn consolidation failed: {e}")
+
+    def _should_extract_facts(
+        self,
+        working_ctx: Dict,
+        entities: List[Dict],
+        intent: str = None
+    ) -> bool:
+        """
+        Determine if facts should be extracted to long-term memory
+
+        Criteria:
+        - High salience entities (repeated mention)
+        - Preference-setting intent
+        - Important entities (tickets, projects)
+        """
+        # Preference-setting intents always extract
+        if intent in ['set_preference', 'update_preference', 'configure']:
+            return True
+
+        # High salience entities in working memory
+        focus_scores = working_ctx.get('focus_scores', {})
+        if any(score > 0.7 for score in focus_scores.values()):
+            return True
+
+        # Important entity types
+        important_types = {'project', 'person', 'team'}
+        if any(e.get('type') in important_types for e in entities):
+            return True
+
+        return False
+
+    async def _extract_and_store_facts(self, message: str, entities: List[Dict]):
+        """
+        Extract and store facts to long-term memory (Layer 3)
+        """
+        try:
+            # Store entities in long-term entity store
+            for entity in entities:
+                entity_id = f"{entity.get('type')}:{entity.get('value')}"
+
+                if entity_id not in self.entities:
+                    self.entities[entity_id] = {
+                        'value': entity.get('value'),
+                        'type': entity.get('type'),
+                        'first_seen': time.time(),
+                        'last_seen': time.time(),
+                        'mention_count': 1,
+                        'importance': entity.get('confidence', 0.5)
+                    }
+                else:
+                    self.entities[entity_id]['mention_count'] += 1
+                    self.entities[entity_id]['last_seen'] = time.time()
+
+                self._entities_dirty = True
+
+            if self.verbose:
+                print(f"[L3-LONGTERM] Stored {len(entities)} entities")
+
+        except Exception as e:
+            if self.verbose:
+                print(f"[L3-LONGTERM] Fact extraction failed: {e}")
+
+    async def consolidate_session(self):
+        """
+        Consolidate memory at session end:
+        Layer 2 (Episodic) → Layer 3 (Long-term)
+
+        This is called at the end of a session.
+        """
+        try:
+            if not self.episodic_buffer:
+                return
+
+            # =================================================================
+            # Get session data from episodic buffer (Layer 2)
+            # =================================================================
+
+            session_summary = self.episodic_buffer.get_session_summary_data()
+            salient_entities = self.episodic_buffer.get_entities_by_salience(top_k=10)
+
+            # =================================================================
+            # Store in long-term memory (Layer 3)
+            # =================================================================
+
+            # Create natural language summary
+            summary_text = await self._create_summary_from_episodic(session_summary)
+
+            # Store session with embedding for semantic search
+            await self._store_session_with_embedding(
+                session_id=session_summary['session_id'],
+                summary=summary_text,
+                session_data=session_summary
+            )
+
+            # Update entity importance in long-term
+            for entity in salient_entities:
+                entity_id = f"{entity.get('type')}:{entity.get('value')}"
+                if entity_id in self.entities:
+                    # Boost importance for salient entities
+                    current_importance = self.entities[entity_id].get('importance', 0.5)
+                    self.entities[entity_id]['importance'] = min(1.0, current_importance + 0.1)
+                    self._entities_dirty = True
+
+            # Clear episodic buffer (Layer 2)
+            self.episodic_buffer.clear()
+
+            # Clear working memory (Layer 1)
+            self.working_memory.reset()
+
+            if self.verbose:
+                print(f"[CONSOLIDATE] Session consolidated to long-term memory")
+                print(f"  Summary length: {len(summary_text)} chars")
+                print(f"  Salient entities: {len(salient_entities)}")
+
+        except Exception as e:
+            if self.verbose:
+                print(f"[CONSOLIDATE] Session consolidation failed: {e}")
+
+    async def _create_summary_from_episodic(self, session_data: Dict) -> str:
+        """Create natural language summary from episodic session data"""
+        try:
+            # Build prompt from session data
+            intents_str = ", ".join(session_data.get('intents', []))
+            entities_str = ", ".join(session_data.get('entities', [])[:10])
+            agents_str = ", ".join(session_data.get('agents_used', []))
+            messages = session_data.get('user_messages', [])
+
+            prompt = f"""Create a detailed, action-focused summary of this conversation session.
+
+IMPORTANT: Capture specific ACTIONS and DETAILS, not just topics!
+
+Facts:
+- Session duration: {session_data.get('duration_seconds', 0):.0f} seconds
+- Number of turns: {session_data.get('turn_count', 0)}
+- Topics/Intents: {intents_str or 'general conversation'}
+- Key entities: {entities_str or 'none'}
+- Tools/Agents used: {agents_str or 'none'}
+- User messages: {messages[:5]}
+
+Requirements:
+1. Capture SPECIFIC ACTIONS (e.g., "updated Jira ticket PROJ-12 status to 'todo'", not just "discussed Jira")
+2. Include SPECIFIC ITEMS modified (ticket IDs, project names, etc.)
+3. Include TOOLS/AGENTS used (e.g., "used jira_agent to query tasks")
+4. Be CONCRETE and SEARCHABLE (use actual keywords from messages)
+
+Example good summary:
+"User queried Jira tasks assigned to them in PROJ project using jira_agent, then updated ticket PROJ-12 status to 'todo'. Also configured email preferences to h.sujan2004@gmail.com and disabled confirmation prompts for Jira operations."
+
+Example bad summary:
+"6 messages about email and PROJ"
+
+Write a factual, action-focused summary (2-4 sentences). Just the summary, no preamble."""
+
+            response = await self.llm.generate_content_async(prompt)
+            return response.text.strip() if hasattr(response, 'text') else str(response).strip()
+
+        except Exception as e:
+            if self.verbose:
+                print(f"[SUMMARY] LLM summary failed: {e}")
+            # Better fallback summary with entities and agents
+            entities_str = ", ".join(session_data.get('entities', [])[:5])
+            agents_str = ", ".join(session_data.get('agents_used', []))
+            intents_str = ", ".join(session_data.get('intents', []))
+
+            parts = []
+            if intents_str:
+                parts.append(f"{intents_str}")
+            if entities_str:
+                parts.append(f"involving {entities_str}")
+            if agents_str:
+                parts.append(f"using {agents_str}")
+
+            return f"{session_data.get('turn_count', 0)} turns: " + ", ".join(parts) if parts else f"{session_data.get('turn_count', 0)} turns"
+
+    async def _store_session_with_embedding(
+        self,
+        session_id: str,
+        summary: str,
+        session_data: Dict
+    ):
+        """Store session in ChromaDB with embedding for semantic search"""
+        try:
+            # Get embedding for summary
+            embedding = await self._get_embedding(summary)
+
+            if not embedding:
+                if self.verbose:
+                    print(f"[STORAGE] Failed to get embedding for session")
+                return
+
+            # Store in ChromaDB episodes collection
+            self.episodes.add(
+                ids=[session_id],
+                embeddings=[embedding],
+                documents=[summary],
+                metadatas=[{
+                    'type': 'session',
+                    'start_time': session_data.get('start_time', 0),
+                    'turn_count': session_data.get('turn_count', 0),
+                    'importance': session_data.get('importance_score', 0.5)
+                }]
+            )
+
+            if self.verbose:
+                print(f"[STORAGE] Session stored in ChromaDB: {session_id[:8]}")
+
+        except Exception as e:
+            if self.verbose:
+                print(f"[STORAGE] Session storage failed: {e}")
+
+    # =========================================================================
+    # SMART CONTEXT ASSEMBLY (Layered Retrieval)
+    # =========================================================================
+
+    async def assemble_context(self, current_message: str) -> Dict[str, str]:
+        """
+        Intelligently assemble context from all memory layers.
+
+        Returns context from:
+        - Layer 1 (Working): Always (immediate context)
+        - Layer 2 (Episodic): If session is active
+        - Layer 3 (Long-term): Core facts always, sessions if relevant
+
+        Returns:
+            Dict with 'always', 'sometimes', and 'working' context strings
+        """
+        try:
+            context = {}
+
+            # =================================================================
+            # ALWAYS: Layer 3 Core Facts (Always injected)
+            # =================================================================
+            context['always'] = self.get_always_context()
+            if context['always']:
+                self.stats['layer3_hits'] += 1
+
+            # =================================================================
+            # SOMETIMES: Layer 3 Relevant Sessions (Semantic search)
+            # =================================================================
+            context['sometimes'] = await self.get_sometimes_context(current_message)
+            if context['sometimes']:
+                self.stats['layer3_hits'] += 1
+
+            # =================================================================
+            # WORKING: Layer 1 + Layer 2 (Current context)
+            # =================================================================
+            working_parts = []
+
+            # Layer 1: Working memory (immediate)
+            working_ctx = self.working_memory.get_active_context()
+            if working_ctx and not working_ctx.get('is_stale'):
+                attention_entities = working_ctx.get('attention_buffer', [])
+                if attention_entities:
+                    entities_str = ", ".join([
+                        f"{e.get('value')} ({e.get('type')})"
+                        for e in attention_entities[-3:]  # Last 3
+                    ])
+                    working_parts.append(f"**Currently discussing:** {entities_str}")
+                    self.stats['layer1_hits'] += 1
+
+            # Layer 2: Episodic buffer (current session)
+            if self.episodic_buffer and self.episodic_buffer.turns:
+                recent_turns = self.episodic_buffer.get_recent_turns(n=3)
+                if recent_turns:
+                    working_parts.append(f"**Recent context** ({len(recent_turns)} turns):")
+                    for turn in recent_turns:
+                        msg_preview = turn['user_message'][:100]
+                        working_parts.append(f"  - User: {msg_preview}...")
+                    self.stats['layer2_hits'] += 1
+
+            context['working'] = "\n".join(working_parts) if working_parts else ""
+
+            if self.verbose:
+                print(f"[CONTEXT] Assembled from all layers:")
+                print(f"  Layer 1 (Working): {'✓' if working_ctx else '✗'}")
+                print(f"  Layer 2 (Episodic): {'✓' if self.episodic_buffer else '✗'}")
+                print(f"  Layer 3 (Always): {'✓' if context['always'] else '✗'}")
+                print(f"  Layer 3 (Sometimes): {'✓' if context['sometimes'] else '✗'}")
+
+            return context
+
+        except Exception as e:
+            if self.verbose:
+                print(f"[CONTEXT] Assembly failed: {e}")
+            return {
+                'always': self.get_always_context(),
+                'sometimes': '',
+                'working': ''
+            }
 
     def _cleanup_stale_data(self):
         """
@@ -914,61 +1683,78 @@ Keep under 75 words. Include specific identifiers mentioned. Just the summary.""
     # SOMETIMES TIER - Session Context
     # =========================================================================
 
-    def get_sometimes_context(self, query: str) -> str:
+    async def get_sometimes_context(self, query: str) -> str:
         """
         Get context that should SOMETIMES be injected.
 
-        Returns last session context if it seems relevant to the query.
+        Uses SEMANTIC SEARCH across ALL past sessions (not just last session!).
+        Returns top relevant sessions based on similarity to query.
         """
         try:
             if not self.sessions:
                 return ""
 
-            # Get last session
-            last_session = self.sessions[-1]
+            # =================================================================
+            # SEMANTIC SEARCH ACROSS ALL SESSIONS (Layer 3 - Long-term Memory)
+            # =================================================================
 
-            # Check relevance
-            try:
-                if not self._is_session_relevant(last_session, query):
-                    return ""
-            except Exception as e:
+            # Search for relevant sessions semantically
+            relevant_sessions = await self._search_relevant_sessions(
+                query=query,
+                top_k=2,  # Top 2 most relevant sessions
+                threshold=0.7  # Only if similarity > 0.7
+            )
+
+            if not relevant_sessions:
                 if self.verbose:
-                    print(f"[MEMORY] Session relevance check failed: {e}")
-                # Default to not including if relevance check fails
+                    print(f"[L3-LONGTERM] No relevant sessions found for query")
                 return ""
 
-            # Format last session
-            try:
-                date = datetime.fromtimestamp(last_session['start_time']).strftime("%Y-%m-%d %H:%M")
-            except (KeyError, TypeError, ValueError):
-                date = "Unknown"
+            self.stats['semantic_searches'] += 1
+            self.stats['layer3_hits'] += 1
 
-            lines = [
-                "# Previous Session Context",
-                "",
-                f"**Last session** ({date}, {last_session.get('message_count', 0)} messages):",
-                f"  {last_session.get('summary', 'No summary')}",
-                ""
-            ]
+            if self.verbose:
+                print(f"[L3-LONGTERM] Found {len(relevant_sessions)} relevant sessions")
+                for session in relevant_sessions:
+                    print(f"  - Session {session['session_id'][:8]} "
+                          f"(similarity: {session.get('similarity', 0):.2f})")
 
-            # Show key messages for context (not just first message)
-            if last_session.get('user_messages'):
-                lines.append("  **Key messages from session:**")
-                for i, msg in enumerate(last_session['user_messages'][:5]):
-                    try:
-                        # Show more of each message to capture important details
-                        msg_preview = msg[:300] if len(msg) <= 300 else f"{msg[:300]}..."
-                        lines.append(f"  - {msg_preview}")
-                    except (TypeError, AttributeError):
-                        continue
+            # Format relevant sessions
+            lines = ["# Relevant Past Sessions", ""]
+
+            for i, session_data in enumerate(relevant_sessions, 1):
+                session = session_data['session']
+                similarity = session_data.get('similarity', 0.0)
+
+                # Format session date
+                try:
+                    date = datetime.fromtimestamp(session['start_time']).strftime("%Y-%m-%d %H:%M")
+                except (KeyError, TypeError, ValueError):
+                    date = "Unknown"
+
+                lines.append(f"**Session {i}** ({date}, similarity: {similarity:.2f}):")
+                lines.append(f"  {session.get('summary', 'No summary')}")
                 lines.append("")
 
-            if last_session.get('entities'):
-                try:
-                    entities = last_session['entities'][:10]
-                    lines.append(f"  _Entities: {', '.join(str(e) for e in entities)}_")
-                except (TypeError, AttributeError):
-                    pass
+                # Show key messages
+                if session.get('user_messages'):
+                    lines.append("  **Key messages:**")
+                    for msg in session['user_messages'][:3]:
+                        try:
+                            msg_preview = msg[:200] if len(msg) <= 200 else f"{msg[:200]}..."
+                            lines.append(f"  - {msg_preview}")
+                        except (TypeError, AttributeError):
+                            continue
+                    lines.append("")
+
+                # Show entities
+                if session.get('entities'):
+                    try:
+                        entities = session['entities'][:8]
+                        lines.append(f"  _Entities: {', '.join(str(e) for e in entities)}_")
+                        lines.append("")
+                    except (TypeError, AttributeError):
+                        pass
 
             return "\n".join(lines)
 
@@ -976,6 +1762,130 @@ Keep under 75 words. Include specific identifiers mentioned. Just the summary.""
             if self.verbose:
                 print(f"[MEMORY] get_sometimes_context failed: {e}")
             return ""
+
+    async def _search_relevant_sessions(
+        self,
+        query: str,
+        top_k: int = 2,
+        threshold: float = 0.7
+    ) -> List[Dict]:
+        """
+        Search for relevant sessions using SEMANTIC SEARCH in ChromaDB.
+
+        This is the FIX for the broken session search!
+        Previously: Only checked last session with entity overlap
+        Now: Semantic search across ALL sessions with similarity scoring
+
+        Args:
+            query: User query to search for
+            top_k: Number of top sessions to return
+            threshold: Minimum similarity threshold (0-1)
+
+        Returns:
+            List of {session: dict, similarity: float} dicts
+        """
+        try:
+            # Get embedding for query
+            query_embedding = await self._get_embedding(query)
+
+            if not query_embedding:
+                if self.verbose:
+                    print(f"[SEMANTIC-SEARCH] Failed to get query embedding")
+                return []
+
+            # Search in ChromaDB episodes collection
+            results = self.episodes.query(
+                query_embeddings=[query_embedding],
+                n_results=min(top_k * 2, len(self.sessions)),  # Get more then filter
+                where={"type": "session"}  # Only session summaries, not individual turns
+            )
+
+            if not results or not results.get('ids') or not results['ids'][0]:
+                if self.verbose:
+                    print(f"[SEMANTIC-SEARCH] No results from ChromaDB")
+                return []
+
+            # Process results
+            relevant = []
+            for i, session_id in enumerate(results['ids'][0]):
+                distance = results['distances'][0][i]
+                similarity = 1.0 - distance  # Convert distance to similarity
+
+                # Filter by threshold
+                if similarity < threshold:
+                    continue
+
+                # Find the session in self.sessions
+                session = next(
+                    (s for s in self.sessions if s.get('session_id') == session_id),
+                    None
+                )
+
+                if session:
+                    relevant.append({
+                        'session': session,
+                        'similarity': similarity,
+                        'session_id': session_id
+                    })
+
+            # Sort by similarity (highest first)
+            relevant.sort(key=lambda x: x['similarity'], reverse=True)
+
+            # Return top K
+            return relevant[:top_k]
+
+        except Exception as e:
+            if self.verbose:
+                print(f"[SEMANTIC-SEARCH] Search failed: {e}")
+
+            # Fallback to simple entity matching if semantic search fails
+            return await self._fallback_session_search(query, top_k)
+
+    async def _fallback_session_search(self, query: str, top_k: int = 2) -> List[Dict]:
+        """
+        Fallback to simple entity/keyword matching if semantic search fails
+        """
+        try:
+            query_lower = query.lower()
+            query_entities = set(self._extract_entities(query))
+
+            scored_sessions = []
+
+            for session in self.sessions[-10:]:  # Last 10 sessions only
+                score = 0.0
+
+                # Entity overlap
+                session_entities = set(e.lower() if isinstance(e, str) else str(e).lower()
+                                     for e in session.get('entities', []))
+                entity_overlap = len(query_entities & session_entities)
+                score += entity_overlap * 0.3
+
+                # Keyword overlap in summary
+                summary = session.get('summary', '').lower()
+                keywords = query_lower.split()
+                keyword_matches = sum(1 for kw in keywords if kw in summary)
+                score += keyword_matches * 0.2
+
+                # Recency bonus (recent sessions more relevant)
+                age_hours = (time.time() - session['end_time']) / 3600
+                recency_score = 1.0 / (1.0 + age_hours / 24.0)  # Decay over days
+                score += recency_score * 0.5
+
+                if score > 0.5:  # Minimum relevance
+                    scored_sessions.append({
+                        'session': session,
+                        'similarity': min(1.0, score),
+                        'session_id': session.get('session_id', '')
+                    })
+
+            # Sort and return top K
+            scored_sessions.sort(key=lambda x: x['similarity'], reverse=True)
+            return scored_sessions[:top_k]
+
+        except Exception as e:
+            if self.verbose:
+                print(f"[FALLBACK-SEARCH] Fallback search failed: {e}")
+            return []
 
     def _is_session_relevant(self, session: Dict, query: str) -> bool:
         """Check if a session is relevant to the current query"""
@@ -1533,7 +2443,7 @@ Keep each fact under 15 words. Be specific and actionable."""
             context_parts.append(always_context)
 
         # SOMETIMES tier - Last session (if relevant)
-        sometimes_context = self.get_sometimes_context(message)
+        sometimes_context = await self.get_sometimes_context(message)
         if sometimes_context:
             context_parts.append(sometimes_context)
 

@@ -721,12 +721,37 @@ Prefer using healthy agents when possible. If a user specifically requests an un
         Called at end of process_message() after generating response.
         """
         try:
+            # Store in legacy session format (backward compatibility)
             await self.unified_memory.add_message(
                 user_message=user_message,
                 response=final_response[:500],
                 agents_used=agents_used,
                 intent_type=intent_type
             )
+
+            # =================================================================
+            # NEW: Consolidate turn across layered memory (L1 → L2 → L3)
+            # =================================================================
+            try:
+                # Get entities from current turn data
+                entities = self._current_turn_data.get('entities', [])
+
+                # Consolidate turn across all memory layers
+                await self.unified_memory.consolidate_turn(
+                    user_message=user_message,
+                    response=final_response[:500],
+                    entities=entities,
+                    intent=intent_type,
+                    agents=agents_used
+                )
+
+                if self.verbose:
+                    print(f"[MEMORY] ✅ Turn consolidated across all layers")
+
+            except Exception as e:
+                if self.verbose:
+                    print(f"[MEMORY] Turn consolidation failed: {e}")
+
         except Exception as e:
             if self.verbose:
                 print(f"[ORCHESTRATOR] Memory storage failed: {e}")
