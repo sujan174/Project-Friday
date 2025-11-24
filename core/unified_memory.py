@@ -530,6 +530,9 @@ class UnifiedMemory:
         if len(self.sessions) > 10:
             self.sessions = self.sessions[-10:]
 
+        # Run cleanup before saving
+        self._cleanup_stale_data()
+
         # Parallel async saves for performance
         save_tasks = [self._save_sessions()]
 
@@ -555,6 +558,55 @@ class UnifiedMemory:
                   f"importance: {session_data['importance_score']:.2f}")
 
         self.current_session = None
+
+    def _cleanup_stale_data(self):
+        """
+        Clean up stale data to prevent bloat and wasted tokens.
+        Runs at session end.
+        """
+        cleaned = []
+
+        # 1. Remove false confirmation preferences (redundant - default is false)
+        keys_to_remove = []
+        for key, fact in self.core_facts.items():
+            if 'confirmation' in key and fact.value == 'false':
+                keys_to_remove.append(key)
+
+        for key in keys_to_remove:
+            del self.core_facts[key]
+            cleaned.append(f"core_fact:{key}")
+            self._core_facts_dirty = True
+
+        # 2. Prune entities not mentioned in last 5 sessions and with low mention count
+        if len(self.sessions) >= 3:
+            # Get entities mentioned in recent sessions
+            recent_entities = set()
+            for session in self.sessions[-5:]:
+                recent_entities.update(e.lower() for e in session.get('entities', []))
+
+            # Also keep entities that match current core facts (email, etc)
+            protected_entities = set()
+            for fact in self.core_facts.values():
+                if fact.category == 'identity':
+                    protected_entities.add(fact.value.lower())
+
+            # Remove stale entities
+            entities_to_remove = []
+            for key, entity in self.entities.items():
+                # Keep if: recently mentioned, frequently used, or protected
+                if (key in recent_entities or
+                    entity.get('mention_count', 0) >= 3 or
+                    key in protected_entities):
+                    continue
+                entities_to_remove.append(key)
+
+            for key in entities_to_remove:
+                del self.entities[key]
+                cleaned.append(f"entity:{key}")
+                self._entities_dirty = True
+
+        if cleaned and self.verbose:
+            print(f"[CLEANUP] Removed stale data: {', '.join(cleaned)}")
 
     def _calculate_importance(self, session: Dict, apply_decay: bool = False) -> float:
         """
